@@ -298,7 +298,7 @@
 </head>
 <body>
 <div class="auth-gate" id="authGate">
-  <div class="auth-card">
+  <div class="auth-card" id="authCardMain">
     <div class="auth-brand">Hirax<span class="x">ia</span></div>
     <div class="auth-tag" data-i18n="authTagline">Create your account &mdash; your CV, searches, and applications are saved so they follow you to any device.</div>
     <div class="auth-error" id="authError"></div>
@@ -315,6 +315,18 @@
       <a id="authToggleLink" data-i18n="authSignInLink">Sign in</a>
     </div>
     <div class="auth-skip"><a id="authSkipLink" data-i18n="authSkipLink">Continue without an account (won&rsquo;t save across devices)</a></div>
+  </div>
+  <div class="auth-card" id="authCardVerify" style="display:none;">
+    <div class="auth-brand">Hirax<span class="x">ia</span></div>
+    <div class="auth-tag" id="verifyTagline" data-i18n="authVerifyTagline">We sent a 6-digit code to your email &mdash; enter it below to activate your account.</div>
+    <div class="auth-error" id="verifyError"></div>
+    <div class="auth-field"><input type="text" id="verifyCode" placeholder="6-digit code" data-i18n-ph="authCodePh" inputmode="numeric" maxlength="6" autocomplete="one-time-code" style="text-align:center; font-size:22px; letter-spacing:8px; font-weight:700;"></div>
+    <button type="button" class="auth-submit" id="verifySubmitBtn" data-i18n="authVerifyBtn">Verify &amp; continue</button>
+    <div class="auth-toggle">
+      <span data-i18n="authNoCode">Didn&rsquo;t get it?</span>
+      <a id="resendCodeLink" data-i18n="authResendCode">Resend code</a>
+    </div>
+    <div class="auth-skip"><a id="verifyBackLink" data-i18n="authBackToSignup">&larr; Back</a></div>
   </div>
 </div>
 <div class="onboard-overlay" id="onboardOverlay"></div>
@@ -356,6 +368,7 @@
             <div class="account-dd-email" id="ddEmail"></div>
             <span class="account-dd-method" id="ddMethod"></span>
           </div>
+          <button type="button" class="account-dd-item" id="ddReplayTour">&#128161; <span data-i18n="ddReplayTour">Replay the app tour</span></button>
           <button type="button" class="account-dd-item" id="ddDownload">&#11015;&#65039; <span data-i18n="ddDownload">Download my data</span></button>
           <button type="button" class="account-dd-item" id="ddChangePw">&#128273; <span data-i18n="ddChangePw">Change password</span></button>
           <div class="account-pw-form" id="pwForm" style="display:none;">
@@ -745,7 +758,11 @@
       ob4:'Tap here any time to pull fresh, live job listings matched to you.',
       ob5:'Filter results: jobs in your own country, across the wider MENA region, remote-only, or ones you can email-apply to directly.',
       ob6:'Chat with Hiraxia any time \u2014 ask about your CV, get interview prep, or career advice.',
-      ob7:'Every application you send gets tracked here automatically, from first contact to offer.'
+      ob7:'Every application you send gets tracked here automatically, from first contact to offer.',
+      greetByName:'Welcome, {name}. Systems ready \u2014 upload your CV or start a search whenever you\u2019re ready.',
+      authVerifyTagline:'We sent a 6-digit code to {email} \u2014 enter it below to activate your account.',
+      authCodePh:'6-digit code', authVerifyBtn:'Verify & continue', authCodeInvalid:'Enter the 6-digit code from your email',
+      authNoCode:'Didn\u2019t get it?', authResendCode:'Resend code', authBackToSignup:'\u2190 Back', authCodeResent:'Code resent \u2014 check your email'
     },
     ar: { dir:'rtl', name:'\u0639\u0631\u0628\u064a',
       uploadCv:'\u0627\u0631\u0641\u0639 \u0633\u064a\u0631\u062a\u0643 \u0627\u0644\u0630\u0627\u062a\u064a\u0629', findJobs:'\u0627\u0628\u062d\u062b \u0639\u0646 \u0648\u0638\u0627\u0626\u0641 \u062c\u062f\u064a\u062f\u0629 \u0627\u0644\u0622\u0646',
@@ -865,7 +882,11 @@
       ob4:'\u0627\u0636\u063a\u0637 \u0647\u0646\u0627 \u0641\u064a \u0623\u064a \u0648\u0642\u062a \u0644\u062c\u0644\u0628 \u0648\u0638\u0627\u0626\u0641 \u062d\u0642\u064a\u0642\u064a\u0629 \u0648\u062d\u062f\u064a\u062b\u0629 \u062a\u0637\u0627\u0628\u0642\u0643.',
       ob5:'\u0635\u0641\u0651\u064a \u0627\u0644\u0646\u062a\u0627\u0626\u062c: \u0648\u0638\u0627\u0626\u0641 \u062f\u0627\u062e\u0644 \u0628\u0644\u062f\u0643\u060c \u0641\u064a \u0627\u0644\u0634\u0631\u0642 \u0627\u0644\u0623\u0648\u0633\u0637 \u0628\u0623\u0643\u0645\u0644\u0647\u060c \u0639\u0646 \u0628\u0639\u062f \u0641\u0642\u0637\u060c \u0623\u0648 \u0627\u0644\u062a\u064a \u064a\u0645\u0643\u0646\u0643 \u0627\u0644\u062a\u0642\u062f\u0645 \u0644\u0647\u0627 \u0645\u0628\u0627\u0634\u0631\u0629 \u0639\u0628\u0631 \u0627\u0644\u0625\u064a\u0645\u064a\u0644.',
       ob6:'\u062a\u062d\u062f\u0651\u062b \u0645\u0639 Hiraxia \u0641\u064a \u0623\u064a \u0648\u0642\u062a \u2014 \u0627\u0633\u0623\u0644 \u0639\u0646 \u0633\u064a\u0631\u062a\u0643 \u0627\u0644\u0630\u0627\u062a\u064a\u0629\u060c \u0627\u0637\u0644\u0628 \u062a\u062d\u0636\u064a\u0631\u064b\u0627 \u0644\u0644\u0645\u0642\u0627\u0628\u0644\u0629\u060c \u0623\u0648 \u0646\u0635\u064a\u062d\u0629 \u0645\u0647\u0646\u064a\u0629.',
-      ob7:'\u0643\u0644 \u0637\u0644\u0628 \u062a\u0631\u0633\u0644\u0647 \u064a\u064f\u062a\u0627\u0628\u0639 \u0647\u0646\u0627 \u062a\u0644\u0642\u0627\u0626\u064a\u064b\u0627\u060c \u0645\u0646 \u0623\u0648\u0644 \u062a\u0648\u0627\u0635\u0644 \u062d\u062a\u0649 \u0627\u0644\u0639\u0631\u0636.'
+      ob7:'\u0643\u0644 \u0637\u0644\u0628 \u062a\u0631\u0633\u0644\u0647 \u064a\u064f\u062a\u0627\u0628\u0639 \u0647\u0646\u0627 \u062a\u0644\u0642\u0627\u0626\u064a\u064b\u0627\u060c \u0645\u0646 \u0623\u0648\u0644 \u062a\u0648\u0627\u0635\u0644 \u062d\u062a\u0649 \u0627\u0644\u0639\u0631\u0636.',
+      greetByName:'\u0623\u0647\u0644\u0627\u064b\u060c {name}. \u0627\u0644\u0623\u0646\u0638\u0645\u0629 \u062c\u0627\u0647\u0632\u0629 \u2014 \u0627\u0631\u0641\u0639 \u0633\u064a\u0631\u062a\u0643 \u0627\u0644\u0630\u0627\u062a\u064a\u0629 \u0623\u0648 \u0627\u0628\u062f\u0623 \u0628\u062d\u062b\u064b\u0627 \u0645\u062a\u0649 \u0634\u0626\u062a.',
+      authVerifyTagline:'\u0623\u0631\u0633\u0644\u0646\u0627 \u0631\u0645\u0632\u064b\u0627 \u0645\u0643\u0648\u0651\u0646\u064b\u0627 \u0645\u0646 6 \u0623\u0631\u0642\u0627\u0645 \u0625\u0644\u0649 {email} \u2014 \u0623\u062f\u062e\u0644\u0647 \u0623\u062f\u0646\u0627\u0647 \u0644\u062a\u0641\u0639\u064a\u0644 \u062d\u0633\u0627\u0628\u0643.',
+      authCodePh:'\u0631\u0645\u0632 \u0645\u0646 6 \u0623\u0631\u0642\u0627\u0645', authVerifyBtn:'\u062a\u0623\u0643\u064a\u062f \u0648\u0645\u062a\u0627\u0628\u0639\u0629', authCodeInvalid:'\u0623\u062f\u062e\u0644 \u0627\u0644\u0631\u0645\u0632 \u0627\u0644\u0645\u0643\u0648\u0651\u0646 \u0645\u0646 6 \u0623\u0631\u0642\u0627\u0645 \u0645\u0646 \u0628\u0631\u064a\u062f\u0643 \u0627\u0644\u0625\u0644\u0643\u062a\u0631\u0648\u0646\u064a',
+      authNoCode:'\u0644\u0645 \u064a\u0635\u0644\u0643\u061f', authResendCode:'\u0625\u0639\u0627\u062f\u0629 \u0625\u0631\u0633\u0627\u0644 \u0627\u0644\u0631\u0645\u0632', authBackToSignup:'\u2192 \u0631\u062c\u0648\u0639', authCodeResent:'\u0623\u064f\u0639\u064a\u062f \u0625\u0631\u0633\u0627\u0644 \u0627\u0644\u0631\u0645\u0632 \u2014 \u062a\u062d\u0642\u0642 \u0645\u0646 \u0628\u0631\u064a\u062f\u0643'
     },
     fr: { dir:'ltr', name:'FR',
       uploadCv:'T\u00e9l\u00e9charger votre CV', findJobs:'Trouver des offres maintenant',
@@ -985,7 +1006,11 @@
       ob4:'Appuyez ici \u00e0 tout moment pour r\u00e9cup\u00e9rer des offres fra\u00eeches et en direct correspondant \u00e0 votre profil.',
       ob5:'Filtrez les r\u00e9sultats : offres dans votre pays, dans toute la r\u00e9gion MENA, remote uniquement, ou celles auxquelles vous pouvez postuler directement par e-mail.',
       ob6:'Discutez avec Hiraxia \u00e0 tout moment \u2014 questions sur votre CV, pr\u00e9paration d\'entretien, ou conseils de carri\u00e8re.',
-      ob7:'Chaque candidature envoy\u00e9e est suivie ici automatiquement, du premier contact \u00e0 l\'offre.'
+      ob7:'Chaque candidature envoy\u00e9e est suivie ici automatiquement, du premier contact \u00e0 l\'offre.',
+      greetByName:'Bienvenue, {name}. Syst\u00e8mes pr\u00eats \u2014 t\u00e9l\u00e9chargez votre CV ou lancez une recherche quand vous voulez.',
+      authVerifyTagline:'Nous avons envoy\u00e9 un code \u00e0 6 chiffres \u00e0 {email} \u2014 saisissez-le ci-dessous pour activer votre compte.',
+      authCodePh:'Code \u00e0 6 chiffres', authVerifyBtn:'V\u00e9rifier et continuer', authCodeInvalid:'Entrez le code \u00e0 6 chiffres re\u00e7u par e-mail',
+      authNoCode:'Pas re\u00e7u ?', authResendCode:'Renvoyer le code', authBackToSignup:'\u2190 Retour', authCodeResent:'Code renvoy\u00e9 \u2014 v\u00e9rifiez votre e-mail'
     },
     zh: { dir:'ltr', name:'\u4e2d\u6587',
       uploadCv:'\u4e0a\u4f20\u60a8\u7684\u7b80\u5386', findJobs:'\u7acb\u5373\u67e5\u627e\u65b0\u804c\u4f4d',
@@ -1105,7 +1130,11 @@
       ob4:'\u968f\u65f6\u70b9\u51fb\u8fd9\u91cc\u83b7\u53d6\u9002\u5408\u60a8\u7684\u6700\u65b0\u5b9e\u65f6\u804c\u4f4d\u3002',
       ob5:'\u7b5b\u9009\u7ed3\u679c\uff1a\u672c\u56fd\u804c\u4f4d\u3001\u6574\u4e2a\u4e2d\u4e1c\u5317\u975e\u5730\u533a\u3001\u4ec5\u8fdc\u7a0b\uff0c\u6216\u53ef\u76f4\u63a5\u90ae\u4ef6\u7533\u8bf7\u7684\u804c\u4f4d\u3002',
       ob6:'\u968f\u65f6\u4e0e Hiraxia \u804a\u5929 \u2014 \u8be2\u95ee\u7b80\u5386\u3001\u9762\u8bd5\u51c6\u5907\u6216\u804c\u4e1a\u5efa\u8bae\u3002',
-      ob7:'\u6bcf\u4e00\u6b21\u53d1\u9001\u7684\u7533\u8bf7\u90fd\u4f1a\u81ea\u52a8\u5728\u8fd9\u91cc\u8ddf\u8e2a\uff0c\u4ece\u9996\u6b21\u8054\u7cfb\u5230\u6536\u5230 offer\u3002'
+      ob7:'\u6bcf\u4e00\u6b21\u53d1\u9001\u7684\u7533\u8bf7\u90fd\u4f1a\u81ea\u52a8\u5728\u8fd9\u91cc\u8ddf\u8e2a\uff0c\u4ece\u9996\u6b21\u8054\u7cfb\u5230\u6536\u5230 offer\u3002',
+      greetByName:'\u6b22\u8fce\uff0c{name}\u3002\u7cfb\u7edf\u5c31\u7eea \u2014 \u968f\u65f6\u4e0a\u4f20\u60a8\u7684\u7b80\u5386\u6216\u5f00\u59cb\u641c\u7d22\u3002',
+      authVerifyTagline:'\u6211\u4eec\u5df2\u5c06 6 \u4f4d\u9a8c\u8bc1\u7801\u53d1\u9001\u81f3 {email} \u2014 \u8bf7\u5728\u4e0b\u65b9\u8f93\u5165\u4ee5\u6fc0\u6d3b\u60a8\u7684\u8d26\u6237\u3002',
+      authCodePh:'6 \u4f4d\u9a8c\u8bc1\u7801', authVerifyBtn:'\u9a8c\u8bc1\u5e76\u7ee7\u7eed', authCodeInvalid:'\u8bf7\u8f93\u5165\u90ae\u4ef6\u4e2d\u7684 6 \u4f4d\u9a8c\u8bc1\u7801',
+      authNoCode:'\u6ca1\u6536\u5230\uff1f', authResendCode:'\u91cd\u65b0\u53d1\u9001\u9a8c\u8bc1\u7801', authBackToSignup:'\u2190 \u8fd4\u56de', authCodeResent:'\u9a8c\u8bc1\u7801\u5df2\u91cd\u53d1 \u2014 \u8bf7\u67e5\u770b\u60a8\u7684\u90ae\u7bb1'
     }
   };
   var HRX_LANG = lsGet('hiraxia_lang') || 'en';
@@ -1514,7 +1543,13 @@
     lsSet('hiraxia_authUser', JSON.stringify(user));
     hideAuthGate();
     paintAccountRow();
+    var firstName = (user.name || '').split(' ')[0] || user.email.split('@')[0];
     toast(t('authWelcomeName', {name: user.name || user.email}));
+    // greet by name in the chat itself too, not just a toast that fades \u2014
+    // keeps Hiraxia's terse, machine-like voice rather than turning gushy
+    if(typeof addMsg === 'function'){
+      addMsg(t('greetByName', {name: esc(firstName)}), 'bot');
+    }
     restoreFromBackend();
   }
 
@@ -1550,6 +1585,10 @@
   });
 
   // download my data — pulls the full backend blob and saves it as a JSON file
+  document.getElementById('ddReplayTour').addEventListener('click', function(){
+    closeAccountDropdown();
+    setTimeout(function(){ startOnboardingTour(); }, 200); // let the dropdown close first so it isn't fighting the tour overlay
+  });
   document.getElementById('ddDownload').addEventListener('click', function(){
     if(!authToken) return;
     fetch(authApiUrl('/auth/data'), { headers: Object.assign({'Authorization':'Bearer '+authToken}, backendHeaders()) })
@@ -1624,6 +1663,25 @@
   });
 
   // ---- Google Sign-In ----
+  // Google's locale (e.g. "ar-LB", "en-AE") is a soft hint at best — often
+  // just a language preference, not a real location — so this only
+  // pre-selects the dropdown for convenience. It never auto-confirms the
+  // country and never overrides a choice the person already made; the
+  // accurate path is still the GPS-based "Detect my location" button.
+  var LOCALE_REGION_OVERRIDES = { SA: 'sa2' }; // handful of cases where the app's internal country code doesn't match the plain ISO code
+  function applyGoogleLocaleHint(locale){
+    try{
+      if(!locale || locale.indexOf('-') === -1) return;
+      if(lsGet('hiraxia_countryConfirmed')) return; // don't second-guess a choice already made
+      var region = locale.split('-')[1].toUpperCase();
+      var code = LOCALE_REGION_OVERRIDES[region] || region.toLowerCase();
+      var match = countries.find(function(c){ return c.v === code; });
+      if(match){
+        sel.value = match.v;
+        lsSet('hiraxia_country', match.v);
+      }
+    }catch(e){ /* best-effort only \u2014 never blocks sign-in over this */ }
+  }
   function handleGoogleCredential(response){
     authClearError();
     fetch(authApiUrl('/auth/google'), {
@@ -1634,6 +1692,7 @@
       .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, d:d}; }); })
       .then(function(res){
         if(!res.ok) { authShowError(res.d.error || t('authErrGeneric')); return; }
+        applyGoogleLocaleHint(res.d.googleLocale);
         completeSignIn(res.d.token, res.d.user);
       })
       .catch(function(){ authShowError(t('authErrGeneric')); });
@@ -1648,6 +1707,70 @@
   }
 
   // ---- manual email/password ----
+  var pendingVerifyEmail = '';
+  function showVerifyCard(email){
+    pendingVerifyEmail = email;
+    document.getElementById('authCardMain').style.display = 'none';
+    document.getElementById('authCardVerify').style.display = 'block';
+    document.getElementById('verifyTagline').textContent = t('authVerifyTagline', {email: email});
+    document.getElementById('verifyCode').value = '';
+    document.getElementById('verifyError').classList.remove('show');
+    document.getElementById('verifyCode').focus();
+  }
+  function backToMainCard(){
+    document.getElementById('authCardVerify').style.display = 'none';
+    document.getElementById('authCardMain').style.display = 'block';
+  }
+  document.getElementById('verifyBackLink').addEventListener('click', backToMainCard);
+
+  document.getElementById('verifySubmitBtn').addEventListener('click', function(){
+    var code = document.getElementById('verifyCode').value.trim();
+    var errEl = document.getElementById('verifyError');
+    errEl.classList.remove('show');
+    if(!code || code.length !== 6){
+      errEl.textContent = t('authCodeInvalid'); errEl.classList.add('show');
+      return;
+    }
+    var btn = this;
+    btn.disabled = true; btn.textContent = '\u2026';
+    fetch(authApiUrl('/auth/verify-email'), {
+      method: 'POST',
+      headers: Object.assign({'Content-Type':'application/json'}, backendHeaders()),
+      body: JSON.stringify({ email: pendingVerifyEmail, code: code })
+    })
+      .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, d:d}; }); })
+      .then(function(res){
+        btn.disabled = false; btn.textContent = t('authVerifyBtn');
+        if(!res.ok){ errEl.textContent = res.d.error || t('authErrGeneric'); errEl.classList.add('show'); return; }
+        completeSignIn(res.d.token, res.d.user);
+      })
+      .catch(function(){ btn.disabled = false; btn.textContent = t('authVerifyBtn'); errEl.textContent = t('authErrGeneric'); errEl.classList.add('show'); });
+  });
+
+  document.getElementById('resendCodeLink').addEventListener('click', function(){
+    var link = this;
+    var origText = link.textContent;
+    link.textContent = '\u2026';
+    fetch(authApiUrl('/auth/resend-code'), {
+      method: 'POST',
+      headers: Object.assign({'Content-Type':'application/json'}, backendHeaders()),
+      body: JSON.stringify({ email: pendingVerifyEmail })
+    })
+      .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, d:d}; }); })
+      .then(function(res){
+        link.textContent = origText;
+        // if email delivery failed twice in a row, the backend gives up
+        // gating on it and signs the person straight in \u2014 don't leave
+        // them staring at a code box that will never get anything
+        if(res.ok && res.d.emailDeliverySkipped && res.d.token){
+          completeSignIn(res.d.token, res.d.user);
+          return;
+        }
+        toast(t('authCodeResent'));
+      })
+      .catch(function(){ link.textContent = origText; toast(t('authErrGeneric')); });
+  });
+
   document.getElementById('authForm').addEventListener('submit', function(e){
     e.preventDefault();
     authClearError();
@@ -1667,7 +1790,14 @@
       .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, d:d}; }); })
       .then(function(res){
         btn.disabled = false; btn.textContent = origText;
-        if(!res.ok){ authShowError(res.d.error || t('authErrGeneric')); return; }
+        if(!res.ok){
+          // existing account with the right password but never verified —
+          // send them straight to the code screen instead of a dead-end error
+          if(res.d.needsVerification){ showVerifyCard(res.d.email || email); return; }
+          authShowError(res.d.error || t('authErrGeneric'));
+          return;
+        }
+        if(res.d.pendingVerification){ showVerifyCard(res.d.email || email); return; }
         completeSignIn(res.d.token, res.d.user);
       })
       .catch(function(){ btn.disabled = false; btn.textContent = origText; authShowError(t('authErrGeneric')); });
