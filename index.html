@@ -281,7 +281,19 @@
   .account-danger-zone{padding:8px 12px 4px;}
   .account-danger-input{width:100%; background:var(--panel-2); border:1px solid rgba(220,60,60,0.4); color:var(--text); font-size:12.5px; padding:8px 10px; border-radius:8px; font-family:inherit; margin:6px 0;}
   .account-danger-btn{width:100%; background:rgba(220,60,60,0.15); border:1px solid rgba(220,60,60,0.5); color:#ff8080; font-size:12.5px; font-weight:700; padding:9px; border-radius:8px; font-family:inherit; cursor:pointer;}
-  .account-danger-btn:disabled{opacity:0.4;}
+  .account-danger-btn:disabled{opacity:0.4;}  .onboard-overlay{position:fixed; inset:0; z-index:99998; background:rgba(3,2,10,0.72); display:none;}
+  .onboard-overlay.open{display:block;}
+  .onboard-highlight{position:relative; z-index:99999 !important; box-shadow:0 0 0 4px var(--violet), 0 0 0 9999px rgba(3,2,10,0.72); border-radius:12px;}
+  .onboard-tip{position:fixed; z-index:100000; max-width:290px; background:var(--panel); border:1px solid var(--border); border-radius:14px; padding:16px; box-shadow:0 16px 44px rgba(0,0,0,0.55); display:none;}
+  .onboard-tip.open{display:block;}
+  .onboard-tip-step{font-size:10.5px; font-weight:700; color:var(--violet); letter-spacing:0.5px; margin-bottom:6px;}
+  .onboard-tip-text{font-size:13.5px; color:var(--text); line-height:1.45; margin-bottom:14px;}
+  .onboard-tip-row{display:flex; align-items:center; justify-content:space-between; gap:8px;}
+  .onboard-dots{display:flex; gap:5px;}
+  .onboard-dot{width:6px; height:6px; border-radius:50%; background:var(--border);}
+  .onboard-dot.on{background:var(--violet);}
+  .onboard-skip{background:none; border:none; color:var(--text-faint); font-size:12px; cursor:pointer; font-family:inherit; text-decoration:underline;}
+  .onboard-next{background:linear-gradient(135deg,var(--violet),var(--violet-deep)); color:#fff; border:none; font-size:12.5px; font-weight:700; padding:8px 16px; border-radius:8px; cursor:pointer; font-family:inherit;}
 </style>
 </head>
 <body>
@@ -303,6 +315,18 @@
       <a id="authToggleLink" data-i18n="authSignInLink">Sign in</a>
     </div>
     <div class="auth-skip"><a id="authSkipLink" data-i18n="authSkipLink">Continue without an account (won&rsquo;t save across devices)</a></div>
+  </div>
+</div>
+<div class="onboard-overlay" id="onboardOverlay"></div>
+<div class="onboard-tip" id="onboardTip">
+  <div class="onboard-tip-step" id="onboardStepLabel"></div>
+  <div class="onboard-tip-text" id="onboardText"></div>
+  <div class="onboard-tip-row">
+    <div class="onboard-dots" id="onboardDots"></div>
+    <div style="display:flex; gap:10px; align-items:center;">
+      <button type="button" class="onboard-skip" id="onboardSkip" data-i18n="onboardSkip">Skip</button>
+      <button type="button" class="onboard-next" id="onboardNext" data-i18n="onboardNext">Next</button>
+    </div>
   </div>
 </div>
 <div class="call-overlay" id="callOverlay">
@@ -713,7 +737,15 @@
       ddChangePw:'Change password', ddCurrentPwPh:'Current password', ddNewPwPh:'New password (6+ characters)', ddUpdatePw:'Update password',
       ddPwTooShort:'New password must be at least 6 characters', ddPwUpdated:'Password updated',
       ddDeleteAccount:'Delete account', ddDeleteWarning:'This permanently deletes your account and everything saved \u2014 CV, searches, applications. This can\u2019t be undone.',
-      ddTypeDelete:'Type DELETE to confirm', ddDeleteConfirm:'Permanently delete my account', ddAccountDeleted:'Account deleted'
+      ddTypeDelete:'Type DELETE to confirm', ddDeleteConfirm:'Permanently delete my account', ddAccountDeleted:'Account deleted',
+      onboardSkip:'Skip', onboardNext:'Next', onboardDone:'Got it',
+      ob1:'Start here \u2014 upload your CV and Hiraxia will scan it and find matching jobs automatically.',
+      ob2:'No CV yet? No problem \u2014 tap this and Hiraxia will build one with you, step by step.',
+      ob3:'Or skip the CV entirely \u2014 just type the role you\u2019re looking for.',
+      ob4:'Tap here any time to pull fresh, live job listings matched to you.',
+      ob5:'Filter results: jobs in your own country, across the wider MENA region, remote-only, or ones you can email-apply to directly.',
+      ob6:'Chat with Hiraxia any time \u2014 ask about your CV, get interview prep, or career advice.',
+      ob7:'Every application you send gets tracked here automatically, from first contact to offer.'
     },
     ar: { dir:'rtl', name:'\u0639\u0631\u0628\u064a',
       uploadCv:'\u0627\u0631\u0641\u0639 \u0633\u064a\u0631\u062a\u0643 \u0627\u0644\u0630\u0627\u062a\u064a\u0629', findJobs:'\u0627\u0628\u062d\u062b \u0639\u0646 \u0648\u0638\u0627\u0626\u0641 \u062c\u062f\u064a\u062f\u0629 \u0627\u0644\u0622\u0646',
@@ -825,7 +857,15 @@
       ddChangePw:'\u062a\u063a\u064a\u064a\u0631 \u0643\u0644\u0645\u0629 \u0627\u0644\u0645\u0631\u0648\u0631', ddCurrentPwPh:'\u0643\u0644\u0645\u0629 \u0627\u0644\u0645\u0631\u0648\u0631 \u0627\u0644\u062d\u0627\u0644\u064a\u0629', ddNewPwPh:'\u0643\u0644\u0645\u0629 \u0645\u0631\u0648\u0631 \u062c\u062f\u064a\u062f\u0629 (6 \u0623\u062d\u0631\u0641 \u0641\u0623\u0643\u062b\u0631)', ddUpdatePw:'\u062a\u062d\u062f\u064a\u062b \u0643\u0644\u0645\u0629 \u0627\u0644\u0645\u0631\u0648\u0631',
       ddPwTooShort:'\u064a\u062c\u0628 \u0623\u0646 \u062a\u062a\u0643\u0648\u0646 \u0643\u0644\u0645\u0629 \u0627\u0644\u0645\u0631\u0648\u0631 \u0627\u0644\u062c\u062f\u064a\u062f\u0629 6 \u0623\u062d\u0631\u0641 \u0639\u0644\u0649 \u0627\u0644\u0623\u0642\u0644', ddPwUpdated:'\u062a\u0645 \u062a\u062d\u062f\u064a\u062b \u0643\u0644\u0645\u0629 \u0627\u0644\u0645\u0631\u0648\u0631',
       ddDeleteAccount:'\u062d\u0630\u0641 \u0627\u0644\u062d\u0633\u0627\u0628', ddDeleteWarning:'\u0633\u064a\u064f\u062d\u0630\u0641 \u062d\u0633\u0627\u0628\u0643 \u0648\u0643\u0644 \u0645\u0627 \u062a\u0645 \u062d\u0641\u0638\u0647 \u0646\u0647\u0627\u0626\u064a\u064b\u0627 \u2014 \u0627\u0644\u0633\u064a\u0631\u0629 \u0627\u0644\u0630\u0627\u062a\u064a\u0629\u060c \u0639\u0645\u0644\u064a\u0627\u062a \u0627\u0644\u0628\u062d\u062b\u060c \u0627\u0644\u0637\u0644\u0628\u0627\u062a. \u0644\u0627 \u064a\u0645\u0643\u0646 \u0627\u0644\u062a\u0631\u0627\u062c\u0639 \u0639\u0646 \u0647\u0630\u0627.',
-      ddTypeDelete:'\u0627\u0643\u062a\u0628 DELETE \u0644\u0644\u062a\u0623\u0643\u064a\u062f', ddDeleteConfirm:'\u0627\u062d\u0630\u0641 \u062d\u0633\u0627\u0628\u064a \u0646\u0647\u0627\u0626\u064a\u064b\u0627', ddAccountDeleted:'\u062a\u0645 \u062d\u0630\u0641 \u0627\u0644\u062d\u0633\u0627\u0628'
+      ddTypeDelete:'\u0627\u0643\u062a\u0628 DELETE \u0644\u0644\u062a\u0623\u0643\u064a\u062f', ddDeleteConfirm:'\u0627\u062d\u0630\u0641 \u062d\u0633\u0627\u0628\u064a \u0646\u0647\u0627\u0626\u064a\u064b\u0627', ddAccountDeleted:'\u062a\u0645 \u062d\u0630\u0641 \u0627\u0644\u062d\u0633\u0627\u0628',
+      onboardSkip:'\u062a\u062e\u0637\u064a', onboardNext:'\u0627\u0644\u062a\u0627\u0644\u064a', onboardDone:'\u0641\u0647\u0645\u062a',
+      ob1:'\u0627\u0628\u062f\u0623 \u0647\u0646\u0627 \u2014 \u0627\u0631\u0641\u0639 \u0633\u064a\u0631\u062a\u0643 \u0627\u0644\u0630\u0627\u062a\u064a\u0629 \u0648\u0633\u064a\u0641\u062d\u0635\u0647\u0627 Hiraxia \u0648\u064a\u062c\u062f \u0648\u0638\u0627\u0626\u0641 \u0645\u0637\u0627\u0628\u0642\u0629 \u062a\u0644\u0642\u0627\u0626\u064a\u064b\u0627.',
+      ob2:'\u0644\u064a\u0633 \u0644\u062f\u064a\u0643 \u0633\u064a\u0631\u0629 \u0630\u0627\u062a\u064a\u0629 \u0628\u0639\u062f\u061f \u0644\u0627 \u0645\u0634\u0643\u0644\u0629 \u2014 \u0627\u0636\u063a\u0637 \u0647\u0646\u0627 \u0648\u0633\u064a\u0628\u0646\u064a\u0647\u0627 Hiraxia \u0645\u0639\u0643 \u062e\u0637\u0648\u0629 \u0628\u062e\u0637\u0648\u0629.',
+      ob3:'\u0623\u0648 \u062a\u062e\u0637\u0651\u0651 \u0627\u0644\u0633\u064a\u0631\u0629 \u0627\u0644\u0630\u0627\u062a\u064a\u0629 \u0643\u0644\u064a\u064b\u0627 \u2014 \u0641\u0642\u0637 \u0627\u0643\u062a\u0628 \u0627\u0644\u0648\u0638\u064a\u0641\u0629 \u0627\u0644\u062a\u064a \u062a\u0628\u062d\u062b \u0639\u0646\u0647\u0627.',
+      ob4:'\u0627\u0636\u063a\u0637 \u0647\u0646\u0627 \u0641\u064a \u0623\u064a \u0648\u0642\u062a \u0644\u062c\u0644\u0628 \u0648\u0638\u0627\u0626\u0641 \u062d\u0642\u064a\u0642\u064a\u0629 \u0648\u062d\u062f\u064a\u062b\u0629 \u062a\u0637\u0627\u0628\u0642\u0643.',
+      ob5:'\u0635\u0641\u0651\u064a \u0627\u0644\u0646\u062a\u0627\u0626\u062c: \u0648\u0638\u0627\u0626\u0641 \u062f\u0627\u062e\u0644 \u0628\u0644\u062f\u0643\u060c \u0641\u064a \u0627\u0644\u0634\u0631\u0642 \u0627\u0644\u0623\u0648\u0633\u0637 \u0628\u0623\u0643\u0645\u0644\u0647\u060c \u0639\u0646 \u0628\u0639\u062f \u0641\u0642\u0637\u060c \u0623\u0648 \u0627\u0644\u062a\u064a \u064a\u0645\u0643\u0646\u0643 \u0627\u0644\u062a\u0642\u062f\u0645 \u0644\u0647\u0627 \u0645\u0628\u0627\u0634\u0631\u0629 \u0639\u0628\u0631 \u0627\u0644\u0625\u064a\u0645\u064a\u0644.',
+      ob6:'\u062a\u062d\u062f\u0651\u062b \u0645\u0639 Hiraxia \u0641\u064a \u0623\u064a \u0648\u0642\u062a \u2014 \u0627\u0633\u0623\u0644 \u0639\u0646 \u0633\u064a\u0631\u062a\u0643 \u0627\u0644\u0630\u0627\u062a\u064a\u0629\u060c \u0627\u0637\u0644\u0628 \u062a\u062d\u0636\u064a\u0631\u064b\u0627 \u0644\u0644\u0645\u0642\u0627\u0628\u0644\u0629\u060c \u0623\u0648 \u0646\u0635\u064a\u062d\u0629 \u0645\u0647\u0646\u064a\u0629.',
+      ob7:'\u0643\u0644 \u0637\u0644\u0628 \u062a\u0631\u0633\u0644\u0647 \u064a\u064f\u062a\u0627\u0628\u0639 \u0647\u0646\u0627 \u062a\u0644\u0642\u0627\u0626\u064a\u064b\u0627\u060c \u0645\u0646 \u0623\u0648\u0644 \u062a\u0648\u0627\u0635\u0644 \u062d\u062a\u0649 \u0627\u0644\u0639\u0631\u0636.'
     },
     fr: { dir:'ltr', name:'FR',
       uploadCv:'T\u00e9l\u00e9charger votre CV', findJobs:'Trouver des offres maintenant',
@@ -937,7 +977,15 @@
       ddChangePw:'Changer le mot de passe', ddCurrentPwPh:'Mot de passe actuel', ddNewPwPh:'Nouveau mot de passe (6+ caract\u00e8res)', ddUpdatePw:'Mettre \u00e0 jour',
       ddPwTooShort:'Le nouveau mot de passe doit faire au moins 6 caract\u00e8res', ddPwUpdated:'Mot de passe mis \u00e0 jour',
       ddDeleteAccount:'Supprimer le compte', ddDeleteWarning:'Ceci supprime d\u00e9finitivement votre compte et tout ce qui est sauvegard\u00e9 \u2014 CV, recherches, candidatures. Action irr\u00e9versible.',
-      ddTypeDelete:'Tapez DELETE pour confirmer', ddDeleteConfirm:'Supprimer d\u00e9finitivement mon compte', ddAccountDeleted:'Compte supprim\u00e9'
+      ddTypeDelete:'Tapez DELETE pour confirmer', ddDeleteConfirm:'Supprimer d\u00e9finitivement mon compte', ddAccountDeleted:'Compte supprim\u00e9',
+      onboardSkip:'Passer', onboardNext:'Suivant', onboardDone:'Compris',
+      ob1:'Commencez ici \u2014 t\u00e9l\u00e9chargez votre CV et Hiraxia l\'analysera pour trouver des offres correspondantes automatiquement.',
+      ob2:'Pas encore de CV ? Pas de souci \u2014 appuyez ici et Hiraxia vous aidera \u00e0 en cr\u00e9er un, \u00e9tape par \u00e9tape.',
+      ob3:'Ou passez le CV \u2014 tapez simplement le poste que vous recherchez.',
+      ob4:'Appuyez ici \u00e0 tout moment pour r\u00e9cup\u00e9rer des offres fra\u00eeches et en direct correspondant \u00e0 votre profil.',
+      ob5:'Filtrez les r\u00e9sultats : offres dans votre pays, dans toute la r\u00e9gion MENA, remote uniquement, ou celles auxquelles vous pouvez postuler directement par e-mail.',
+      ob6:'Discutez avec Hiraxia \u00e0 tout moment \u2014 questions sur votre CV, pr\u00e9paration d\'entretien, ou conseils de carri\u00e8re.',
+      ob7:'Chaque candidature envoy\u00e9e est suivie ici automatiquement, du premier contact \u00e0 l\'offre.'
     },
     zh: { dir:'ltr', name:'\u4e2d\u6587',
       uploadCv:'\u4e0a\u4f20\u60a8\u7684\u7b80\u5386', findJobs:'\u7acb\u5373\u67e5\u627e\u65b0\u804c\u4f4d',
@@ -1049,7 +1097,15 @@
       ddChangePw:'\u4fee\u6539\u5bc6\u7801', ddCurrentPwPh:'\u5f53\u524d\u5bc6\u7801', ddNewPwPh:'\u65b0\u5bc6\u7801\uff086\u4f4d\u4ee5\u4e0a\uff09', ddUpdatePw:'\u66f4\u65b0\u5bc6\u7801',
       ddPwTooShort:'\u65b0\u5bc6\u7801\u81f3\u5c116\u4f4d', ddPwUpdated:'\u5bc6\u7801\u5df2\u66f4\u65b0',
       ddDeleteAccount:'\u5220\u9664\u8d26\u6237', ddDeleteWarning:'\u6b64\u64cd\u4f5c\u5c06\u6c38\u4e45\u5220\u9664\u60a8\u7684\u8d26\u6237\u53ca\u6240\u6709\u4fdd\u5b58\u7684\u6570\u636e \u2014 \u7b80\u5386\u3001\u641c\u7d22\u3001\u7533\u8bf7\u3002\u65e0\u6cd5\u64a4\u9500\u3002',
-      ddTypeDelete:'\u8f93\u5165 DELETE \u4ee5\u786e\u8ba4', ddDeleteConfirm:'\u6c38\u4e45\u5220\u9664\u6211\u7684\u8d26\u6237', ddAccountDeleted:'\u8d26\u6237\u5df2\u5220\u9664'
+      ddTypeDelete:'\u8f93\u5165 DELETE \u4ee5\u786e\u8ba4', ddDeleteConfirm:'\u6c38\u4e45\u5220\u9664\u6211\u7684\u8d26\u6237', ddAccountDeleted:'\u8d26\u6237\u5df2\u5220\u9664',
+      onboardSkip:'\u8df3\u8fc7', onboardNext:'\u4e0b\u4e00\u6b65', onboardDone:'\u77e5\u9053\u4e86',
+      ob1:'\u4ece\u8fd9\u91cc\u5f00\u59cb \u2014 \u4e0a\u4f20\u60a8\u7684\u7b80\u5386\uff0cHiraxia \u4f1a\u81ea\u52a8\u626b\u63cf\u5e76\u5339\u914d\u76f8\u5173\u804c\u4f4d\u3002',
+      ob2:'\u8fd8\u6ca1\u6709\u7b80\u5386\uff1f\u6ca1\u5173\u7cfb \u2014 \u70b9\u51fb\u8fd9\u91cc\uff0cHiraxia \u4f1a\u5e2e\u60a8\u4e00\u6b65\u6b65\u5236\u4f5c\u3002',
+      ob3:'\u6216\u8005\u8df3\u8fc7\u7b80\u5386 \u2014 \u76f4\u63a5\u8f93\u5165\u60a8\u8981\u627e\u7684\u804c\u4f4d\u3002',
+      ob4:'\u968f\u65f6\u70b9\u51fb\u8fd9\u91cc\u83b7\u53d6\u9002\u5408\u60a8\u7684\u6700\u65b0\u5b9e\u65f6\u804c\u4f4d\u3002',
+      ob5:'\u7b5b\u9009\u7ed3\u679c\uff1a\u672c\u56fd\u804c\u4f4d\u3001\u6574\u4e2a\u4e2d\u4e1c\u5317\u975e\u5730\u533a\u3001\u4ec5\u8fdc\u7a0b\uff0c\u6216\u53ef\u76f4\u63a5\u90ae\u4ef6\u7533\u8bf7\u7684\u804c\u4f4d\u3002',
+      ob6:'\u968f\u65f6\u4e0e Hiraxia \u804a\u5929 \u2014 \u8be2\u95ee\u7b80\u5386\u3001\u9762\u8bd5\u51c6\u5907\u6216\u804c\u4e1a\u5efa\u8bae\u3002',
+      ob7:'\u6bcf\u4e00\u6b21\u53d1\u9001\u7684\u7533\u8bf7\u90fd\u4f1a\u81ea\u52a8\u5728\u8fd9\u91cc\u8ddf\u8e2a\uff0c\u4ece\u9996\u6b21\u8054\u7cfb\u5230\u6536\u5230 offer\u3002'
     }
   };
   var HRX_LANG = lsGet('hiraxia_lang') || 'en';
@@ -1631,7 +1687,7 @@
     initGoogleSignIn();
   }
   document.getElementById('authToggleLink').addEventListener('click', function(){ setAuthMode(authMode==='login' ? 'signup' : 'login'); });
-  document.getElementById('authSkipLink').addEventListener('click', function(){ hideAuthGate(); });
+  document.getElementById('authSkipLink').addEventListener('click', function(){ hideAuthGate(); maybeStartOnboarding(); });
 
   // ---- restore saved CV / searches / applications after sign-in ----
   function restoreFromBackend(){
@@ -1653,8 +1709,10 @@
         if(data.searches && data.searches.length){
           lsSet('hiraxia_searchHistory', JSON.stringify(data.searches));
         }
+        if(data.onboarded){ lsSet('hiraxia_onboarded', '1'); }
+        maybeStartOnboarding();
       })
-      .catch(function(){ /* backend unreachable — local data still works fine */ });
+      .catch(function(){ maybeStartOnboarding(); /* backend unreachable — local data still works fine */ });
   }
 
   // ---- push local changes up to the backend (best-effort, never blocks UI) ----
@@ -1670,6 +1728,82 @@
       }).catch(function(){ /* silent — local storage remains the source of truth if this fails */ });
     }, 900);
   }
+
+  /* ================= first-time guided tour ================= *
+   * Shown once, ever, per account (or per browser for guests). Points at
+   * the handful of actions a brand new person actually needs on day one:
+   * upload/build a CV, search directly, filter results, chat, and where
+   * applications get tracked. Skippable at any step. */
+  var ONBOARD_STEPS = [
+    { sel: '#uploadBtn', textKey: 'ob1' },
+    { sel: '#buildCvBtn', textKey: 'ob2' },
+    { sel: '#jobQuery', textKey: 'ob3' },
+    { sel: '#findBtn', textKey: 'ob4' },
+    { sel: '#geoChips', textKey: 'ob5' },
+    { sel: '#askInput', textKey: 'ob6' },
+    { sel: '.nav-item[data-name="Applications"]', textKey: 'ob7' }
+  ];
+  var onboardIdx = 0;
+  var onboardActiveEl = null;
+
+  function maybeStartOnboarding(){
+    if(lsGet('hiraxia_onboarded') === '1') return;
+    lsSet('hiraxia_onboarded', '1'); // set immediately so a refresh mid-tour never re-triggers it
+    if(typeof syncToBackend === 'function') syncToBackend({ onboarded: true });
+    setTimeout(function(){ startOnboardingTour(); }, 500); // let the page settle first
+  }
+
+  function startOnboardingTour(){
+    onboardIdx = 0;
+    document.getElementById('onboardOverlay').classList.add('open');
+    document.getElementById('onboardDots').innerHTML = ONBOARD_STEPS.map(function(_, i){
+      return '<span class="onboard-dot'+(i===0?' on':'')+'"></span>';
+    }).join('');
+    showOnboardStep(0);
+  }
+
+  function endOnboardingTour(){
+    if(onboardActiveEl) onboardActiveEl.classList.remove('onboard-highlight');
+    document.getElementById('onboardOverlay').classList.remove('open');
+    document.getElementById('onboardTip').classList.remove('open');
+  }
+
+  function showOnboardStep(i){
+    if(onboardActiveEl) onboardActiveEl.classList.remove('onboard-highlight');
+    var step = ONBOARD_STEPS[i];
+    var el = step ? document.querySelector(step.sel) : null;
+    if(!el){ showOnboardStep(i+1); return; } // target not on screen (e.g. a hidden button) — skip it gracefully
+    onboardIdx = i;
+    onboardActiveEl = el;
+    el.classList.add('onboard-highlight');
+    el.scrollIntoView({behavior:'smooth', block:'center'});
+    setTimeout(function(){ positionOnboardTip(el); }, 260); // wait for scroll to settle before measuring position
+    document.getElementById('onboardStepLabel').textContent = (i+1)+' / '+ONBOARD_STEPS.length;
+    document.getElementById('onboardText').textContent = t(step.textKey);
+    document.getElementById('onboardNext').textContent = (i === ONBOARD_STEPS.length-1) ? t('onboardDone') : t('onboardNext');
+    document.querySelectorAll('.onboard-dot').forEach(function(d, di){ d.classList.toggle('on', di===i); });
+    document.getElementById('onboardTip').classList.add('open');
+  }
+
+  function positionOnboardTip(el){
+    var tip = document.getElementById('onboardTip');
+    var r = el.getBoundingClientRect();
+    var tipH = tip.offsetHeight || 140;
+    var spaceBelow = window.innerHeight - r.bottom;
+    var top = spaceBelow > tipH + 24 ? r.bottom + 12 : Math.max(12, r.top - tipH - 12);
+    var left = Math.min(Math.max(12, r.left), window.innerWidth - 302);
+    tip.style.top = top + 'px';
+    tip.style.left = left + 'px';
+  }
+
+  document.getElementById('onboardNext').addEventListener('click', function(){
+    if(onboardIdx >= ONBOARD_STEPS.length - 1){ endOnboardingTour(); return; }
+    showOnboardStep(onboardIdx + 1);
+  });
+  document.getElementById('onboardSkip').addEventListener('click', endOnboardingTour);
+  window.addEventListener('resize', function(){
+    if(onboardActiveEl && document.getElementById('onboardTip').classList.contains('open')) positionOnboardTip(onboardActiveEl);
+  });
 
   // ---- gate: check for an existing session on page load ----
   (function initAuthGate(){
