@@ -1840,9 +1840,9 @@
           lsSet('hiraxia_searchHistory', JSON.stringify(data.searches));
         }
         if(data.onboarded){ lsSet('hiraxia_onboarded', '1'); }
-        maybeStartOnboarding();
+        maybeStartOnboarding(!!data.onboarded);
       })
-      .catch(function(){ maybeStartOnboarding(); /* backend unreachable — local data still works fine */ });
+      .catch(function(){ maybeStartOnboarding(); /* backend unreachable — fall back to the local flag as a best-effort guess */ });
   }
 
   // ---- push local changes up to the backend (best-effort, never blocks UI) ----
@@ -1876,8 +1876,17 @@
   var onboardIdx = 0;
   var onboardActiveEl = null;
 
-  function maybeStartOnboarding(){
-    if(lsGet('hiraxia_onboarded') === '1') return;
+  function maybeStartOnboarding(knownOnboarded){
+    // knownOnboarded: pass true/false when the backend has already told us
+    // for certain whether THIS account has seen the tour \u2014 that's always
+    // trusted over the local flag, since the local flag is shared across
+    // every account that's ever signed into this browser and would
+    // otherwise wrongly block a brand new account that happens to share a
+    // device with one that already saw the tour. Only falls back to the
+    // local flag when there's no account to check (guest mode, or the
+    // backend was unreachable).
+    var skip = (typeof knownOnboarded === 'boolean') ? knownOnboarded : (lsGet('hiraxia_onboarded') === '1');
+    if(skip) return;
     lsSet('hiraxia_onboarded', '1'); // set immediately so a refresh mid-tour never re-triggers it
     if(typeof syncToBackend === 'function') syncToBackend({ onboarded: true });
     setTimeout(function(){ startOnboardingTour(); }, 500); // let the page settle first
