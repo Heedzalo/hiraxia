@@ -259,7 +259,29 @@
   .auth-error.show{display:block;}
   .auth-skip{text-align:center; margin-top:18px; font-size:11px; color:var(--text-faint);}
   .auth-skip a{color:var(--text-faint); text-decoration:underline; cursor:pointer;}
-  .auth-loading{text-align:center; color:var(--text-dim); font-size:13px; padding:20px 0;}
+  .auth-loading{text-align:center; color:var(--text-dim); font-size:13px; padding:20px 0;}  .account-pill{display:flex; align-items:center; gap:7px; background:var(--panel-2); border:1px solid var(--border); border-radius:999px; padding:5px 12px 5px 6px; font-size:12px; color:var(--text); cursor:pointer; user-select:none;}
+  .account-avatar{width:24px; height:24px; border-radius:50%; background:linear-gradient(135deg,var(--violet),var(--cyan)); color:#fff; font-weight:800; font-size:11px; display:flex; align-items:center; justify-content:center; flex-shrink:0;}
+  .account-chevron{color:var(--text-faint); font-size:9px; margin-left:1px;}
+  .account-dropdown{position:absolute; top:calc(100% + 8px); right:0; width:260px; background:var(--panel); border:1px solid var(--border); border-radius:13px; box-shadow:0 16px 40px rgba(0,0,0,0.5); z-index:9000; padding:6px; display:none;}
+  .account-dropdown.open{display:block;}
+  .account-dd-head{padding:12px 12px 10px; border-bottom:1px solid var(--border-soft);}
+  .account-dd-name{font-size:13.5px; font-weight:700; color:var(--text);}
+  .account-dd-email{font-size:11.5px; color:var(--text-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .account-dd-method{display:inline-block; margin-top:6px; font-size:10px; font-weight:700; padding:2px 8px; border-radius:999px; background:var(--panel-2); color:var(--text-faint);}
+  .account-dd-item{display:flex; align-items:center; gap:9px; width:100%; text-align:left; background:none; border:none; color:var(--text); font-size:13px; padding:10px 12px; border-radius:9px; cursor:pointer; font-family:inherit;}
+  .account-dd-item:active{background:var(--panel-2);}
+  .account-dd-item.danger{color:#ff8080;}
+  .account-dd-divider{height:1px; background:var(--border-soft); margin:5px 4px;}
+  .account-pw-form{padding:10px 12px 4px;}
+  .account-pw-form input{width:100%; background:var(--panel-2); border:1px solid var(--border); color:var(--text); font-size:13px; padding:9px 10px; border-radius:8px; font-family:inherit; margin-bottom:7px;}
+  .account-pw-form button{width:100%; background:linear-gradient(135deg,var(--violet),var(--violet-deep)); color:#fff; border:none; font-size:13px; font-weight:700; padding:9px; border-radius:8px; font-family:inherit; cursor:pointer;}
+  .account-dd-msg{font-size:11.5px; padding:0 12px 8px; color:var(--text-dim);}
+  .account-dd-msg.err{color:#ff9d9d;}
+  .account-dd-msg.ok{color:#8ef0c0;}
+  .account-danger-zone{padding:8px 12px 4px;}
+  .account-danger-input{width:100%; background:var(--panel-2); border:1px solid rgba(220,60,60,0.4); color:var(--text); font-size:12.5px; padding:8px 10px; border-radius:8px; font-family:inherit; margin:6px 0;}
+  .account-danger-btn{width:100%; background:rgba(220,60,60,0.15); border:1px solid rgba(220,60,60,0.5); color:#ff8080; font-size:12.5px; font-weight:700; padding:9px; border-radius:8px; font-family:inherit; cursor:pointer;}
+  .account-danger-btn:disabled{opacity:0.4;}
 </style>
 </head>
 <body>
@@ -298,9 +320,36 @@
       <div class="brand-row"><span class="brand">Hirax<span class="x">ia</span></span><span class="beta-pill">BETA</span><span class="beta-pill" id="buildMarker" style="background:#7c5cff; color:#fff; margin-left:6px;">...</span>
         <div id="langBar" style="margin-left:auto; display:flex; gap:5px;"></div>
       </div>
-      <div id="accountRow" style="display:none; align-items:center; gap:8px; margin:-6px 0 14px; font-size:11.5px; color:var(--text-dim);">
-        <span id="accountEmail"></span>
-        <a id="signOutLink" style="color:var(--text-faint); text-decoration:underline; cursor:pointer;" data-i18n="signOutLink">Sign out</a>
+      <div id="accountRow" style="display:none; justify-content:flex-end; margin:0 0 16px; position:relative;">
+        <div class="account-pill" id="accountPillBtn">
+          <span class="account-avatar" id="accountAvatar">?</span>
+          <span id="accountEmail" style="max-width:120px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></span>
+          <span class="account-chevron">&#9662;</span>
+        </div>
+        <div class="account-dropdown" id="accountDropdown">
+          <div class="account-dd-head">
+            <div class="account-dd-name" id="ddName"></div>
+            <div class="account-dd-email" id="ddEmail"></div>
+            <span class="account-dd-method" id="ddMethod"></span>
+          </div>
+          <button type="button" class="account-dd-item" id="ddDownload">&#11015;&#65039; <span data-i18n="ddDownload">Download my data</span></button>
+          <button type="button" class="account-dd-item" id="ddChangePw">&#128273; <span data-i18n="ddChangePw">Change password</span></button>
+          <div class="account-pw-form" id="pwForm" style="display:none;">
+            <input type="password" id="pwCurrent" placeholder="Current password" data-i18n-ph="ddCurrentPwPh">
+            <input type="password" id="pwNew" placeholder="New password (6+ characters)" data-i18n-ph="ddNewPwPh">
+            <button type="button" id="pwSubmit" data-i18n="ddUpdatePw">Update password</button>
+          </div>
+          <div class="account-dd-msg" id="pwMsg" style="display:none;"></div>
+          <div class="account-dd-divider"></div>
+          <button type="button" class="account-dd-item" id="ddSignOut">&#128682; <span data-i18n="signOutLink">Sign out</span></button>
+          <div class="account-dd-divider"></div>
+          <button type="button" class="account-dd-item danger" id="ddDeleteToggle">&#128465;&#65039; <span data-i18n="ddDeleteAccount">Delete account</span></button>
+          <div class="account-danger-zone" id="deleteZone" style="display:none;">
+            <div class="account-dd-msg err" style="padding:0 0 4px;" data-i18n="ddDeleteWarning">This permanently deletes your account and everything saved &mdash; CV, searches, applications. This can&rsquo;t be undone.</div>
+            <input type="text" id="deleteConfirmInput" class="account-danger-input" data-i18n-ph="ddTypeDelete" placeholder="Type DELETE to confirm">
+            <button type="button" class="account-danger-btn" id="ddDeleteConfirm" disabled data-i18n="ddDeleteConfirm">Permanently delete my account</button>
+          </div>
+        </div>
       </div>
       <div class="eyebrow" data-i18n="eyebrow">Your AI career agent</div>
       <h1 class="hero" data-i18n="heroTitle">I'm here to<br>get you <span class="accent">hired.</span></h1>
@@ -659,7 +708,12 @@
       authSkipLink:'Continue without an account (won\u2019t save across devices)',
       authWelcome:'Welcome back!', authWelcomeName:'Welcome, {name}!',
       authErrGeneric:'Something went wrong \u2014 try again.',
-      authGoogleUnavailable:'Google Sign-In isn\u2019t available right now \u2014 use email below.', signOutLink:'Sign out'
+      authGoogleUnavailable:'Google Sign-In isn\u2019t available right now \u2014 use email below.', signOutLink:'Sign out',
+      ddManualAccount:'Email account', ddDownload:'Download my data', ddDownloadDone:'Downloaded \u2014 check your Downloads folder',
+      ddChangePw:'Change password', ddCurrentPwPh:'Current password', ddNewPwPh:'New password (6+ characters)', ddUpdatePw:'Update password',
+      ddPwTooShort:'New password must be at least 6 characters', ddPwUpdated:'Password updated',
+      ddDeleteAccount:'Delete account', ddDeleteWarning:'This permanently deletes your account and everything saved \u2014 CV, searches, applications. This can\u2019t be undone.',
+      ddTypeDelete:'Type DELETE to confirm', ddDeleteConfirm:'Permanently delete my account', ddAccountDeleted:'Account deleted'
     },
     ar: { dir:'rtl', name:'\u0639\u0631\u0628\u064a',
       uploadCv:'\u0627\u0631\u0641\u0639 \u0633\u064a\u0631\u062a\u0643 \u0627\u0644\u0630\u0627\u062a\u064a\u0629', findJobs:'\u0627\u0628\u062d\u062b \u0639\u0646 \u0648\u0638\u0627\u0626\u0641 \u062c\u062f\u064a\u062f\u0629 \u0627\u0644\u0622\u0646',
@@ -766,7 +820,12 @@
       authSkipLink:'\u0627\u0644\u0645\u062a\u0627\u0628\u0639\u0629 \u0628\u062f\u0648\u0646 \u062d\u0633\u0627\u0628 (\u0644\u0646 \u064a\u064f\u062d\u0641\u0638 \u0639\u0628\u0631 \u0627\u0644\u0623\u062c\u0647\u0632\u0629)',
       authWelcome:'\u0623\u0647\u0644\u0627\u064b \u0628\u0639\u0648\u062f\u062a\u0643!', authWelcomeName:'\u0623\u0647\u0644\u0627\u064b {name}!',
       authErrGeneric:'\u062d\u062f\u062b \u062e\u0637\u0623 \u0645\u0627 \u2014 \u062d\u0627\u0648\u0644 \u0645\u062c\u062f\u062f\u0627\u064b.',
-      authGoogleUnavailable:'\u062a\u0633\u062c\u064a\u0644 \u0627\u0644\u062f\u062e\u0648\u0644 \u0639\u0628\u0631 Google \u063a\u064a\u0631 \u0645\u062a\u0627\u062d \u062d\u0627\u0644\u064a\u064b\u0627 \u2014 \u0627\u0633\u062a\u062e\u062f\u0645 \u0627\u0644\u0628\u0631\u064a\u062f \u0623\u062f\u0646\u0627\u0647.', signOutLink:'\u062a\u0633\u062c\u064a\u0644 \u0627\u0644\u062e\u0631\u0648\u062c'
+      authGoogleUnavailable:'\u062a\u0633\u062c\u064a\u0644 \u0627\u0644\u062f\u062e\u0648\u0644 \u0639\u0628\u0631 Google \u063a\u064a\u0631 \u0645\u062a\u0627\u062d \u062d\u0627\u0644\u064a\u064b\u0627 \u2014 \u0627\u0633\u062a\u062e\u062f\u0645 \u0627\u0644\u0628\u0631\u064a\u062f \u0623\u062f\u0646\u0627\u0647.', signOutLink:'\u062a\u0633\u062c\u064a\u0644 \u0627\u0644\u062e\u0631\u0648\u062c',
+      ddManualAccount:'\u062d\u0633\u0627\u0628 \u0628\u0631\u064a\u062f \u0625\u0644\u0643\u062a\u0631\u0648\u0646\u064a', ddDownload:'\u062a\u0646\u0632\u064a\u0644 \u0628\u064a\u0627\u0646\u0627\u062a\u064a', ddDownloadDone:'\u062a\u0645 \u0627\u0644\u062a\u0646\u0632\u064a\u0644 \u2014 \u062a\u062d\u0642\u0642 \u0645\u0646 \u0645\u062c\u0644\u062f \u0627\u0644\u062a\u0646\u0632\u064a\u0644\u0627\u062a',
+      ddChangePw:'\u062a\u063a\u064a\u064a\u0631 \u0643\u0644\u0645\u0629 \u0627\u0644\u0645\u0631\u0648\u0631', ddCurrentPwPh:'\u0643\u0644\u0645\u0629 \u0627\u0644\u0645\u0631\u0648\u0631 \u0627\u0644\u062d\u0627\u0644\u064a\u0629', ddNewPwPh:'\u0643\u0644\u0645\u0629 \u0645\u0631\u0648\u0631 \u062c\u062f\u064a\u062f\u0629 (6 \u0623\u062d\u0631\u0641 \u0641\u0623\u0643\u062b\u0631)', ddUpdatePw:'\u062a\u062d\u062f\u064a\u062b \u0643\u0644\u0645\u0629 \u0627\u0644\u0645\u0631\u0648\u0631',
+      ddPwTooShort:'\u064a\u062c\u0628 \u0623\u0646 \u062a\u062a\u0643\u0648\u0646 \u0643\u0644\u0645\u0629 \u0627\u0644\u0645\u0631\u0648\u0631 \u0627\u0644\u062c\u062f\u064a\u062f\u0629 6 \u0623\u062d\u0631\u0641 \u0639\u0644\u0649 \u0627\u0644\u0623\u0642\u0644', ddPwUpdated:'\u062a\u0645 \u062a\u062d\u062f\u064a\u062b \u0643\u0644\u0645\u0629 \u0627\u0644\u0645\u0631\u0648\u0631',
+      ddDeleteAccount:'\u062d\u0630\u0641 \u0627\u0644\u062d\u0633\u0627\u0628', ddDeleteWarning:'\u0633\u064a\u064f\u062d\u0630\u0641 \u062d\u0633\u0627\u0628\u0643 \u0648\u0643\u0644 \u0645\u0627 \u062a\u0645 \u062d\u0641\u0638\u0647 \u0646\u0647\u0627\u0626\u064a\u064b\u0627 \u2014 \u0627\u0644\u0633\u064a\u0631\u0629 \u0627\u0644\u0630\u0627\u062a\u064a\u0629\u060c \u0639\u0645\u0644\u064a\u0627\u062a \u0627\u0644\u0628\u062d\u062b\u060c \u0627\u0644\u0637\u0644\u0628\u0627\u062a. \u0644\u0627 \u064a\u0645\u0643\u0646 \u0627\u0644\u062a\u0631\u0627\u062c\u0639 \u0639\u0646 \u0647\u0630\u0627.',
+      ddTypeDelete:'\u0627\u0643\u062a\u0628 DELETE \u0644\u0644\u062a\u0623\u0643\u064a\u062f', ddDeleteConfirm:'\u0627\u062d\u0630\u0641 \u062d\u0633\u0627\u0628\u064a \u0646\u0647\u0627\u0626\u064a\u064b\u0627', ddAccountDeleted:'\u062a\u0645 \u062d\u0630\u0641 \u0627\u0644\u062d\u0633\u0627\u0628'
     },
     fr: { dir:'ltr', name:'FR',
       uploadCv:'T\u00e9l\u00e9charger votre CV', findJobs:'Trouver des offres maintenant',
@@ -873,7 +932,12 @@
       authSkipLink:'Continuer sans compte (ne sera pas sauvegard\u00e9 entre appareils)',
       authWelcome:'Bon retour !', authWelcomeName:'Bienvenue, {name} !',
       authErrGeneric:'Une erreur est survenue \u2014 r\u00e9essayez.',
-      authGoogleUnavailable:'La connexion Google n\'est pas disponible pour le moment \u2014 utilisez l\'email ci-dessous.', signOutLink:'D\u00e9connexion'
+      authGoogleUnavailable:'La connexion Google n\'est pas disponible pour le moment \u2014 utilisez l\'email ci-dessous.', signOutLink:'D\u00e9connexion',
+      ddManualAccount:'Compte e-mail', ddDownload:'T\u00e9l\u00e9charger mes donn\u00e9es', ddDownloadDone:'T\u00e9l\u00e9charg\u00e9 \u2014 v\u00e9rifiez votre dossier T\u00e9l\u00e9chargements',
+      ddChangePw:'Changer le mot de passe', ddCurrentPwPh:'Mot de passe actuel', ddNewPwPh:'Nouveau mot de passe (6+ caract\u00e8res)', ddUpdatePw:'Mettre \u00e0 jour',
+      ddPwTooShort:'Le nouveau mot de passe doit faire au moins 6 caract\u00e8res', ddPwUpdated:'Mot de passe mis \u00e0 jour',
+      ddDeleteAccount:'Supprimer le compte', ddDeleteWarning:'Ceci supprime d\u00e9finitivement votre compte et tout ce qui est sauvegard\u00e9 \u2014 CV, recherches, candidatures. Action irr\u00e9versible.',
+      ddTypeDelete:'Tapez DELETE pour confirmer', ddDeleteConfirm:'Supprimer d\u00e9finitivement mon compte', ddAccountDeleted:'Compte supprim\u00e9'
     },
     zh: { dir:'ltr', name:'\u4e2d\u6587',
       uploadCv:'\u4e0a\u4f20\u60a8\u7684\u7b80\u5386', findJobs:'\u7acb\u5373\u67e5\u627e\u65b0\u804c\u4f4d',
@@ -980,7 +1044,12 @@
       authSkipLink:'\u4e0d\u767b\u5f55\u7ee7\u7eed\uff08\u65e0\u6cd5\u8de8\u8bbe\u5907\u4fdd\u5b58\uff09',
       authWelcome:'\u6b22\u8fce\u56de\u6765\uff01', authWelcomeName:'\u6b22\u8fce\uff0c{name}\uff01',
       authErrGeneric:'\u51fa\u9519\u4e86 \u2014 \u8bf7\u91cd\u8bd5\u3002',
-      authGoogleUnavailable:'Google \u767b\u5f55\u76ee\u524d\u4e0d\u53ef\u7528 \u2014 \u8bf7\u4f7f\u7528\u4e0b\u9762\u7684\u90ae\u7bb1\u3002', signOutLink:'\u9000\u51fa\u767b\u5f55'
+      authGoogleUnavailable:'Google \u767b\u5f55\u76ee\u524d\u4e0d\u53ef\u7528 \u2014 \u8bf7\u4f7f\u7528\u4e0b\u9762\u7684\u90ae\u7bb1\u3002', signOutLink:'\u9000\u51fa\u767b\u5f55',
+      ddManualAccount:'\u90ae\u7bb1\u8d26\u6237', ddDownload:'\u4e0b\u8f7d\u6211\u7684\u6570\u636e', ddDownloadDone:'\u5df2\u4e0b\u8f7d \u2014 \u8bf7\u67e5\u770b\u4e0b\u8f7d\u6587\u4ef6\u5939',
+      ddChangePw:'\u4fee\u6539\u5bc6\u7801', ddCurrentPwPh:'\u5f53\u524d\u5bc6\u7801', ddNewPwPh:'\u65b0\u5bc6\u7801\uff086\u4f4d\u4ee5\u4e0a\uff09', ddUpdatePw:'\u66f4\u65b0\u5bc6\u7801',
+      ddPwTooShort:'\u65b0\u5bc6\u7801\u81f3\u5c116\u4f4d', ddPwUpdated:'\u5bc6\u7801\u5df2\u66f4\u65b0',
+      ddDeleteAccount:'\u5220\u9664\u8d26\u6237', ddDeleteWarning:'\u6b64\u64cd\u4f5c\u5c06\u6c38\u4e45\u5220\u9664\u60a8\u7684\u8d26\u6237\u53ca\u6240\u6709\u4fdd\u5b58\u7684\u6570\u636e \u2014 \u7b80\u5386\u3001\u641c\u7d22\u3001\u7533\u8bf7\u3002\u65e0\u6cd5\u64a4\u9500\u3002',
+      ddTypeDelete:'\u8f93\u5165 DELETE \u4ee5\u786e\u8ba4', ddDeleteConfirm:'\u6c38\u4e45\u5220\u9664\u6211\u7684\u8d26\u6237', ddAccountDeleted:'\u8d26\u6237\u5df2\u5220\u9664'
     }
   };
   var HRX_LANG = lsGet('hiraxia_lang') || 'en';
@@ -1368,9 +1437,18 @@
     var row = document.getElementById('accountRow');
     if(authToken && authUser){
       row.style.display = 'flex';
-      document.getElementById('accountEmail').textContent = authUser.name ? (authUser.name+' \u00b7 '+authUser.email) : authUser.email;
+      var label = authUser.name || authUser.email;
+      document.getElementById('accountEmail').textContent = label;
+      document.getElementById('accountAvatar').textContent = label.charAt(0).toUpperCase();
+      document.getElementById('ddName').textContent = authUser.name || authUser.email.split('@')[0];
+      document.getElementById('ddEmail').textContent = authUser.email;
+      var methodEl = document.getElementById('ddMethod');
+      methodEl.textContent = authUser.authMethod === 'google' ? 'Google' : (t('ddManualAccount') || 'Email account');
+      // password change only makes sense for manual accounts \u2014 Google accounts have no password here
+      document.getElementById('ddChangePw').style.display = authUser.authMethod === 'google' ? 'none' : 'flex';
     } else {
       row.style.display = 'none';
+      closeAccountDropdown();
     }
   }
 
@@ -1390,9 +1468,103 @@
     lsSet('hiraxia_authUser', '');
     paintAccountRow();
   }
-  document.getElementById('signOutLink').addEventListener('click', function(){
+
+  // ---- account dropdown ----
+  function closeAccountDropdown(){
+    document.getElementById('accountDropdown').classList.remove('open');
+    document.getElementById('pwForm').style.display = 'none';
+    document.getElementById('pwMsg').style.display = 'none';
+    document.getElementById('deleteZone').style.display = 'none';
+    document.getElementById('deleteConfirmInput').value = '';
+    document.getElementById('ddDeleteConfirm').disabled = true;
+  }
+  document.getElementById('accountPillBtn').addEventListener('click', function(e){
+    e.stopPropagation();
+    document.getElementById('accountDropdown').classList.toggle('open');
+  });
+  document.addEventListener('click', function(e){
+    var dd = document.getElementById('accountDropdown');
+    if(dd.classList.contains('open') && !dd.contains(e.target) && e.target.id !== 'accountPillBtn') closeAccountDropdown();
+  });
+
+  document.getElementById('ddSignOut').addEventListener('click', function(){
+    closeAccountDropdown();
     signOutLocally();
     showAuthGate();
+  });
+
+  // download my data — pulls the full backend blob and saves it as a JSON file
+  document.getElementById('ddDownload').addEventListener('click', function(){
+    if(!authToken) return;
+    fetch(authApiUrl('/auth/data'), { headers: Object.assign({'Authorization':'Bearer '+authToken}, backendHeaders()) })
+      .then(function(r){ return r.json(); })
+      .then(function(res){
+        var blob = new Blob([JSON.stringify(res.data || {}, null, 2)], {type:'application/json'});
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url; a.download = 'hiraxia-my-data.json';
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        closeAccountDropdown();
+        toast(t('ddDownloadDone'));
+      })
+      .catch(function(){ toast(t('authErrGeneric')); });
+  });
+
+  // change password (manual accounts only)
+  document.getElementById('ddChangePw').addEventListener('click', function(){
+    var form = document.getElementById('pwForm');
+    form.style.display = form.style.display === 'none' ? 'block' : 'none';
+    document.getElementById('pwMsg').style.display = 'none';
+  });
+  document.getElementById('pwSubmit').addEventListener('click', function(){
+    var current = document.getElementById('pwCurrent').value;
+    var next = document.getElementById('pwNew').value;
+    var msg = document.getElementById('pwMsg');
+    var btn = document.getElementById('pwSubmit');
+    if(!next || next.length < 6){
+      msg.textContent = t('ddPwTooShort'); msg.className = 'account-dd-msg err'; msg.style.display = 'block';
+      return;
+    }
+    btn.disabled = true; btn.textContent = '\u2026';
+    fetch(authApiUrl('/auth/change-password'), {
+      method: 'POST',
+      headers: Object.assign({'Content-Type':'application/json', 'Authorization':'Bearer '+authToken}, backendHeaders()),
+      body: JSON.stringify({ currentPassword: current, newPassword: next })
+    })
+      .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, d:d}; }); })
+      .then(function(res){
+        btn.disabled = false; btn.textContent = t('ddUpdatePw');
+        if(!res.ok){ msg.textContent = res.d.error || t('authErrGeneric'); msg.className = 'account-dd-msg err'; msg.style.display = 'block'; return; }
+        msg.textContent = t('ddPwUpdated'); msg.className = 'account-dd-msg ok'; msg.style.display = 'block';
+        document.getElementById('pwCurrent').value = ''; document.getElementById('pwNew').value = '';
+      })
+      .catch(function(){ btn.disabled = false; btn.textContent = t('ddUpdatePw'); msg.textContent = t('authErrGeneric'); msg.className = 'account-dd-msg err'; msg.style.display = 'block'; });
+  });
+
+  // delete account — requires typing DELETE, no accidental one-tap deletion
+  document.getElementById('ddDeleteToggle').addEventListener('click', function(){
+    var zone = document.getElementById('deleteZone');
+    zone.style.display = zone.style.display === 'none' ? 'block' : 'none';
+  });
+  document.getElementById('deleteConfirmInput').addEventListener('input', function(){
+    document.getElementById('ddDeleteConfirm').disabled = this.value.trim() !== 'DELETE';
+  });
+  document.getElementById('ddDeleteConfirm').addEventListener('click', function(){
+    var btn = this;
+    btn.disabled = true; btn.textContent = '\u2026';
+    fetch(authApiUrl('/auth/account'), {
+      method: 'DELETE',
+      headers: Object.assign({'Authorization':'Bearer '+authToken}, backendHeaders())
+    })
+      .then(function(){
+        closeAccountDropdown();
+        signOutLocally();
+        lsSet('hiraxia_savedResults', ''); lsSet('hiraxia_appLog', ''); lsSet('hiraxia_searchHistory', '');
+        toast(t('ddAccountDeleted'));
+        showAuthGate();
+      })
+      .catch(function(){ btn.disabled = false; btn.textContent = t('ddDeleteConfirm'); toast(t('authErrGeneric')); });
   });
 
   // ---- Google Sign-In ----
