@@ -3153,17 +3153,21 @@
     var refreshToken = lsGet('hiraxia_gmailRefreshToken');
     var clientId = lsGet('hiraxia_gmailClientId');
     if(!refreshToken || !clientId) return Promise.reject(new Error('Gmail not connected'));
-    return fetch('https://oauth2.googleapis.com/token', {
+    // Routed through the backend, NOT called directly against Google \u2014 Google
+    // requires a client_secret for this exchange even with PKCE (a documented
+    // quirk of their "Web application" client type), and that secret can only
+    // ever live server-side, never in browser code.
+    return fetch(authApiUrl('/gmail-token-refresh'), {
       method:'POST',
-      headers:{'Content-Type':'application/x-www-form-urlencoded'},
-      body: new URLSearchParams({ client_id: clientId, refresh_token: refreshToken, grant_type: 'refresh_token' })
+      headers: Object.assign({'Content-Type':'application/json'}, backendHeaders()),
+      body: JSON.stringify({ refresh_token: refreshToken, client_id: clientId })
     })
       .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, d:d}; }); })
       .then(function(res){
         if(!res.ok || !res.d.access_token){
           // surfaces the real reason (invalid_grant = revoked/expired refresh
           // token, most commonly) instead of a bare null that hides why
-          throw new Error(res.d.error_description || res.d.error || 'token refresh failed');
+          throw new Error(res.d.error || 'token refresh failed');
         }
         lsSet('hiraxia_gmailAccessToken', res.d.access_token);
         lsSet('hiraxia_gmailTokenExpiry', String(Date.now() + (res.d.expires_in||3600)*1000));
@@ -3215,32 +3219,32 @@
     var clientId = lsGet('hiraxia_gmailClientId');
     if(!verifier || !clientId) return;
     var redirectUri = window.location.origin + window.location.pathname;
-    fetch('https://oauth2.googleapis.com/token', {
+    // Routed through the backend, NOT called directly against Google \u2014 same
+    // client_secret requirement as the refresh flow above. The frontend never
+    // sees or handles that secret at any point.
+    fetch(authApiUrl('/gmail-token-exchange'), {
       method:'POST',
-      headers:{'Content-Type':'application/x-www-form-urlencoded'},
-      body: new URLSearchParams({
-        client_id: clientId,
+      headers: Object.assign({'Content-Type':'application/json'}, backendHeaders()),
+      body: JSON.stringify({
         code: code,
         code_verifier: verifier,
-        grant_type: 'authorization_code',
+        client_id: clientId,
         redirect_uri: redirectUri
       })
     })
-      .then(function(r){ return r.json(); })
-      .then(function(d){
-        if(d.access_token){
+      .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, d:d}; }); })
+      .then(function(res){
+        var d = res.d;
+        if(res.ok && d.access_token){
           lsSet('hiraxia_gmailAccessToken', d.access_token);
           if(d.refresh_token) lsSet('hiraxia_gmailRefreshToken', d.refresh_token);
           lsSet('hiraxia_gmailTokenExpiry', String(Date.now() + (d.expires_in||3600)*1000));
           toast(d.refresh_token ? t('toastGmailConnected') : '\u26a0\ufe0f Connected, but Google didn\u2019t grant lasting access \u2014 see the note below the Gmail button.');
         } else {
-          // Show Google's ACTUAL rejection reason instead of the old generic
-          // "check your Client ID" text \u2014 that copy is stale from before
-          // Gmail connect used the shared Client ID automatically, and it was
-          // hiding the real cause (usually a redirect_uri mismatch between
-          // the authorization step and this token-exchange step).
-          console.log('Gmail token exchange failed:', d.error, d.error_description);
-          toast('\u26a0\ufe0f Gmail connection failed: ' + (d.error_description || d.error || 'unknown error') + ' \u2014 try again.');
+          // Show the real rejection reason from Google (relayed through the
+          // backend) instead of hiding it behind stale generic copy.
+          console.log('Gmail token exchange failed:', d.error);
+          toast('\u26a0\ufe0f Gmail connection failed: ' + (d.error || 'unknown error') + ' \u2014 try again.');
         }
         updateGmailStatus();
         // clean the ?code= out of the URL so a refresh doesn't retry it
