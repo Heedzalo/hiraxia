@@ -412,10 +412,22 @@
         <button class="find-btn" id="findBtn" data-i18n="findJobs">Find Fresh Jobs Now</button>
         <div class="sp-row" style="margin-top:8px;display:none;"><button class="find-btn" id="deepScanBtn" data-i18n="deepScanBtn" style="background:linear-gradient(135deg,#8f6bff,#5b3ff0); color:#fff;">&#127961; Deep Country Scan</button></div>
         <!-- Deep scan is now unified into every "Find Fresh Jobs Now" search automatically, per explicit request - full city sweep happens as one search instead of a separate button/pipeline. Button hidden, not removed, in case standalone deep scan is wanted back later. -->
+        <!-- Autofill Applications + Copy Profile for Extension hidden on purpose:
+             both exist to support a companion Chrome extension that isn't built
+             or published yet, so showing them just confused people with tools
+             for a feature that doesn't work on the other end. Not removed —
+             just re-add these two lines once the extension actually ships:
         <div class="sp-row"><button class="find-btn" id="autofillEntryBtn" data-i18n="autofillApps" style="background:linear-gradient(135deg,#3ee88a,#39c6ff); color:#04101f;">&#129513; Autofill Applications (Chrome extension)</button></div>
         <div class="sp-row"><button class="find-btn" id="exportProfileBtn" data-i18n="copyProfile" style="background:var(--panel-2); color:var(--text); border:1px solid var(--border);">&#129513; Copy Profile for Extension</button></div>
+        -->
+        <button type="button" id="autofillEntryBtn" style="display:none;"></button>
+        <button type="button" id="exportProfileBtn" style="display:none;"></button>
+        <div class="sp-row"><button class="find-btn" id="gmailConnectBtn" style="background:linear-gradient(135deg,#8f6bff,#5b3ff0); color:#fff; display:flex; align-items:center; justify-content:center; gap:9px;">
+          <svg width="18" height="18" viewBox="0 0 48 48" style="flex:none;"><path fill="#fff" fill-opacity="0.95" d="M24 24 44 10v26a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V10l20 14Z"/><path fill="#8f6bff" d="M24 24 4 10h40L24 24Z" opacity="0.35"/><path fill="#fff" d="M4 10l20 14L44 10" stroke="#fff" stroke-width="2.2" stroke-linejoin="round" fill="none"/></svg>
+          <span data-i18n="btnConnectGmail">Connect Gmail</span>
+        </button></div>
+        <div id="gmailConnectStatus" style="font-size:11.5px; color:var(--text-dim); margin:-4px 0 4px;"></div>
         <div class="sp-note" data-i18n="spNote">Live APIs (GoogleJobs, Jooble, Remotive, Arbeitnow, Jobicy, The Muse, Adzuna) return dated listings &mdash; anything over 20 days old is dropped automatically.</div>
-        <button class="settings-toggle" id="settingsToggle" data-i18n="settingsToggle">&#9881; AI &amp; company board settings</button>
         <button id="viewDiagBtn" data-i18n="viewDiagBtn" style="display:block;margin:6px 0;padding:6px 12px;font-size:12px;border-radius:6px;border:1px solid #444;background:#222;color:#ddd;cursor:pointer;">&#128203; View last search diagnostics</button>
         <div id="diagModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:9999;padding:16px;overflow-y:auto;">
           <div style="max-width:600px;margin:0 auto;background:#181818;border-radius:10px;padding:14px;">
@@ -427,38 +439,13 @@
             <button id="copyDiagModalBtn" style="margin-top:8px;width:100%;padding:10px;border-radius:6px;border:none;background:#3a6;color:#fff;font-size:14px;cursor:pointer;">&#128203; Copy to clipboard</button>
           </div>
         </div>
-        <div class="settings-body" id="settingsBody">
-          <div class="key-warn" style="background:rgba(94,234,212,0.08); border-color:rgba(94,234,212,0.3); color:var(--text);" data-i18n="settingsIntro">&#9989; Job search, AI chat, and email discovery all run through Hiraxia's own backend now &mdash; nothing to configure here for that.</div>
-          <label data-i18n="lblGreenhouse">Greenhouse company boards (free, no signup &mdash; comma-separated tokens, e.g. notion,figma)</label>
-          <input type="text" id="greenhouseTokens" placeholder="company-token-1, company-token-2">
-          <label data-i18n="lblLever">Lever company boards (free, no signup &mdash; comma-separated tokens)</label>
-          <input type="text" id="leverTokens" placeholder="company-token-1, company-token-2">
-          <label data-i18n="lblWorkable">Workable company boards (free, no signup &mdash; comma-separated tokens)</label>
-          <input type="text" id="workableTokens" placeholder="company-token-1, company-token-2">
-          <label data-i18n="lblHunter">Hunter.io API key (free 50/mo &mdash; finds HR emails for companies with no ATS)</label>
-          <input type="text" id="hunterKey" placeholder="Hunter.io API key">
-          <label data-i18n="lblProspeo">Prospeo API key (free 75/mo &mdash; automatic fallback when Hunter misses or hits its limit)</label>
-          <input type="text" id="prospeoKey" placeholder="Prospeo API key (prospeo.io &rarr; API)">
-          <label data-i18n="lblGamalogic">Gamalogic API key (free 500 credits &mdash; verifies predicted emails, upgrades them to confirmed when a specific pattern checks out)</label>
-          <input type="text" id="gamalogicKey" placeholder="Gamalogic API key (gamalogic.com)">
-          <label data-i18n="lblTavily">Tavily API key (free 1000/mo &mdash; finds a company\u2019s real website, replaces domain-guessing)</label>
-          <input type="text" id="tavilyKey" placeholder="tvly-...">
-          <label data-i18n="lblBrave">Brave Search API key (own independent index &mdash; free tier needs a card for identity check, not charged)</label>
-          <input type="text" id="braveKey" placeholder="BSA...">
-          <label data-i18n="lblAnymail">Anymail Finder API key (free 100 credits &mdash; company-name search, no rate limits, free on misses)</label>
-          <input type="text" id="anymailKey" placeholder="amf_...">
-          <label data-i18n="lblGmailClient">Gmail Client ID (from Google Cloud Console &mdash; enables real drafts with attachments, no mailto: link needed)</label>
-          <input type="text" id="gmailClientId" placeholder="xxxxx.apps.googleusercontent.com">
-          <div class="sp-row"><button type="button" id="gmailConnectBtn" data-i18n="btnConnectGmail" style="background:var(--panel-2); border:1px solid var(--border); color:var(--text); font-size:12.5px; padding:8px 14px; border-radius:8px; font-family:inherit; cursor:pointer; width:100%;">&#128231; Connect Gmail</button></div>
-          <div id="gmailConnectStatus" style="font-size:12px; color:var(--text-dim); margin-top:4px;"></div>
-          <button type="button" class="find-btn" id="discoverBtn" data-i18n="btnDiscover" style="margin-top:8px; background:var(--panel-2); color:var(--text); border:1px solid var(--border); font-size:12.5px; padding:9px;">&#128269; Discover Real Companies (one-time scan of 100 candidates)</button>
-          <div id="discoverStatus" style="font-size:11px; color:var(--text-faint); margin-top:6px;"></div>
-          <label data-i18n="lblGroq">Groq API key (only needed for voice mode &mdash; talking to Hiraxia out loud)</label>
-          <input type="text" id="groqKey" placeholder="gsk_...">
-          <div class="key-warn" data-i18n="settingsFootnote">&#9888; These remaining keys are optional add-ons stored only in this browser (localStorage). Everything else Hiraxia needs is already built in.</div>
-          <label style="margin-top:10px;" data-i18n="lblVoiceTester">Hiraxia voice &mdash; tap to hear each, pick your favorite</label>
-          <div id="voiceTester" style="display:flex; flex-wrap:wrap; gap:6px;"></div>
-        </div>
+        <!-- id="settingsBody" removed on purpose \u2014 those API key fields were
+             all leftover from before the backend consolidated job search, AI
+             chat, and email discovery server-side (see settingsIntro's own old
+             text, which already said as much). None of it did anything for a
+             real end user. Connect Gmail moved to the account dropdown, where
+             it's actually easy to find, instead of buried behind a settings
+             toggle nobody had a reason to open. -->
       </div>
 
       <div class="thinking-card">
@@ -659,7 +646,7 @@
       lblBrave:'Brave Search API key (own independent index \u2014 free tier needs a card for identity check, not charged)',
       lblAnymail:'Anymail Finder API key (free 100 credits \u2014 company-name search, no rate limits, free on misses)',
       lblGmailClient:'Gmail Client ID (from Google Cloud Console \u2014 enables real drafts with attachments, no mailto: link needed)',
-      btnConnectGmail:'\ud83d\udce7 Connect Gmail',
+      btnConnectGmail:'Connect Gmail',
       btnDiscover:'\ud83d\udd0d Discover Real Companies (one-time scan of 100 candidates)',
       lblGroq:'Groq API key (only needed for voice mode \u2014 talking to Hiraxia out loud)',
       settingsFootnote:'\u26a0 These remaining keys are optional add-ons stored only in this browser (localStorage). Everything else Hiraxia needs is already built in.',
@@ -782,7 +769,7 @@
       lblBrave:'\u0645\u0641\u062a\u0627\u062d Brave Search (\u0641\u0647\u0631\u0633 \u0645\u0633\u062a\u0642\u0644 \u062e\u0627\u0635 \u2014 \u0627\u0644\u0641\u0626\u0629 \u0627\u0644\u0645\u062c\u0627\u0646\u064a\u0629 \u062a\u062d\u062a\u0627\u062c \u0628\u0637\u0627\u0642\u0629 \u0644\u0644\u062a\u062d\u0642\u0642\u060c \u062f\u0648\u0646 \u0641\u0631\u0636 \u0631\u0633\u0648\u0645)',
       lblAnymail:'\u0645\u0641\u062a\u0627\u062d Anymail Finder (100 \u0631\u0635\u064a\u062f \u0645\u062c\u0627\u0646\u064a \u2014 \u0628\u062d\u062b \u0628\u0627\u0633\u0645 \u0627\u0644\u0634\u0631\u0643\u0629\u060c \u062f\u0648\u0646 \u062d\u062f\u0648\u062f \u0645\u0639\u062f\u0644\u060c \u0645\u062c\u0627\u0646\u064a \u0639\u0646\u062f \u0639\u062f\u0645 \u0627\u0644\u0639\u062b\u0648\u0631)',
       lblGmailClient:'\u0645\u0639\u0631\u0641 Gmail Client (\u0645\u0646 Google Cloud Console \u2014 \u064a\u0641\u0639\u0651\u0644 \u0645\u0633\u0648\u062f\u0627\u062a \u062d\u0642\u064a\u0642\u064a\u0629 \u0645\u0639 \u0645\u0631\u0641\u0642\u0627\u062a\u060c \u062f\u0648\u0646 \u062d\u0627\u062c\u0629 \u0644\u0631\u0627\u0628\u0637 mailto)',
-      btnConnectGmail:'\ud83d\udce7 \u0631\u0628\u0637 Gmail',
+      btnConnectGmail:'\u0631\u0628\u0637 Gmail',
       btnDiscover:'\ud83d\udd0d \u0627\u0643\u062a\u0634\u0641 \u0634\u0631\u0643\u0627\u062a \u062d\u0642\u064a\u0642\u064a\u0629 (\u0641\u062d\u0635 \u0644\u0645\u0631\u0629 \u0648\u0627\u062d\u062f\u0629 \u0644\u0640 100 \u0645\u0631\u0634\u062d)',
       lblGroq:'\u0645\u0641\u062a\u0627\u062d Groq (\u0645\u0637\u0644\u0648\u0628 \u0641\u0642\u0637 \u0644\u0648\u0636\u0639 \u0627\u0644\u0635\u0648\u062a \u2014 \u0627\u0644\u062a\u062d\u062f\u062b \u0645\u0639 Hiraxia \u0628\u0635\u0648\u062a\u0643)',
       settingsFootnote:'\u26a0\ufe0f \u0647\u0630\u0647 \u0627\u0644\u0645\u0641\u0627\u062a\u064a\u062d \u0627\u0644\u0645\u062a\u0628\u0642\u064a\u0629 \u0625\u0636\u0627\u0641\u0627\u062a \u0627\u062e\u062a\u064a\u0627\u0631\u064a\u0629 \u062a\u064f\u062e\u0632\u0651\u0646 \u0641\u0642\u0637 \u0641\u064a \u0647\u0630\u0627 \u0627\u0644\u0645\u062a\u0635\u0641\u062d (localStorage). \u0643\u0644 \u0645\u0627 \u064a\u062d\u062a\u0627\u062c\u0647 Hiraxia \u0645\u0648\u062c\u0648\u062f \u0628\u0627\u0644\u0641\u0639\u0644.',
@@ -906,7 +893,7 @@
       lblBrave:'Cl\u00e9 API Brave Search (index ind\u00e9pendant \u2014 le niveau gratuit demande une carte pour v\u00e9rification, sans frais)',
       lblAnymail:'Cl\u00e9 API Anymail Finder (100 cr\u00e9dits gratuits \u2014 recherche par nom d\'entreprise, sans limite, gratuit en cas d\'\u00e9chec)',
       lblGmailClient:'ID Client Gmail (depuis Google Cloud Console \u2014 permet des brouillons r\u00e9els avec pi\u00e8ces jointes)',
-      btnConnectGmail:'\ud83d\udce7 Connecter Gmail',
+      btnConnectGmail:'Connecter Gmail',
       btnDiscover:'\ud83d\udd0d D\u00e9couvrir de vraies entreprises (scan unique de 100 candidats)',
       lblGroq:'Cl\u00e9 API Groq (n\u00e9cessaire uniquement pour le mode vocal \u2014 parler \u00e0 Hiraxia)',
       settingsFootnote:'\u26a0\ufe0f Ces cl\u00e9s restantes sont des extensions optionnelles stock\u00e9es uniquement dans ce navigateur (localStorage). Tout le reste est d\u00e9j\u00e0 int\u00e9gr\u00e9.',
@@ -1030,7 +1017,7 @@
       lblBrave:'Brave Search API \u5bc6\u94a5\uff08\u72ec\u7acb\u7d22\u5f15 \u2014 \u514d\u8d39\u5c42\u9700\u8981\u5361\u7247\u9a8c\u8bc1\u8eab\u4efd\uff0c\u4e0d\u4f1a\u6536\u8d39\uff09',
       lblAnymail:'Anymail Finder API \u5bc6\u94a5\uff08\u514d\u8d39 100 \u79ef\u5206 \u2014 \u6309\u516c\u53f8\u540d\u641c\u7d22\uff0c\u65e0\u9891\u7387\u9650\u5236\uff0c\u672a\u547d\u4e2d\u4e0d\u6263\u8d39\uff09',
       lblGmailClient:'Gmail \u5ba2\u6237\u7aef ID\uff08\u6765\u81ea Google Cloud Console \u2014 \u542f\u7528\u5e26\u9644\u4ef6\u7684\u771f\u5b9e\u8349\u7a3f\uff0c\u65e0\u9700 mailto \u94fe\u63a5\uff09',
-      btnConnectGmail:'\ud83d\udce7 \u8fde\u63a5 Gmail',
+      btnConnectGmail:'\u8fde\u63a5 Gmail',
       btnDiscover:'\ud83d\udd0d \u53d1\u73b0\u771f\u5b9e\u516c\u53f8\uff08\u4e00\u6b21\u6027\u626b\u63cf 100 \u4e2a\u5019\u9009\uff09',
       lblGroq:'Groq API \u5bc6\u94a5\uff08\u4ec5\u8bed\u97f3\u6a21\u5f0f\u9700\u8981 \u2014 \u4e0e Hiraxia \u8bed\u97f3\u4ea4\u8c08\uff09',
       settingsFootnote:'\u26a0\ufe0f \u5176\u4f59\u5bc6\u94a5\u4e3a\u53ef\u9009\u9644\u52a0\u529f\u80fd\uff0c\u4ec5\u5b58\u50a8\u5728\u6b64\u6d4f\u89c8\u5668\u4e2d\uff08localStorage\uff09\u3002\u5176\u4ed6\u529f\u80fd Hiraxia \u5df2\u5185\u7f6e\u3002',
@@ -2013,9 +2000,7 @@
       .catch(function(){ return null; });
   }
 
-  document.getElementById('settingsToggle').addEventListener('click', function(){
-    document.getElementById('settingsBody').classList.toggle('open');
-  });
+  // settingsToggle/settingsBody removed \u2014 see note above the search-panel closing div
 
   // Real fix for a real, repeated problem: the live status line updates too
   // fast to reliably select, screenshot, or even reach a button in time
@@ -3112,8 +3097,12 @@
     return crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)).then(base64url);
   }
   function startGmailConnect(){
-    var clientId = document.getElementById('gmailClientId').value.trim();
-    if(!clientId){ toast(t('toastPasteClientId')); return; }
+    // Uses the same shared GOOGLE_CLIENT_ID that already powers Sign-In \u2014
+    // one OAuth client can cover multiple scopes/flows, so there's no reason
+    // to ask every individual user to bring their own developer credential.
+    // That old manual-paste requirement only ever made sense for testing.
+    var clientId = GOOGLE_CLIENT_ID;
+    if(!clientId || clientId.indexOf('PASTE_YOUR') === 0){ toast(t('authGoogleUnavailable')); return; }
     lsSet('hiraxia_gmailClientId', clientId);
     var verifier = randomVerifier();
     sessionStorage.setItem('hiraxia_pkce_verifier', verifier);
@@ -4710,10 +4699,13 @@
     document.getElementById('amCvRewritePreview').textContent = '';
     document.getElementById('amCvMatchBtn').textContent = '\ud83d\udcca Check how well my CV matches this job';
     document.getElementById('amCvMatchBtn').disabled = false;
+    var gmailReady = !!(cvFile && lsGet('hiraxia_gmailRefreshToken') && lsGet('hiraxia_gmailClientId'));
     document.getElementById('amToLabel').innerHTML = job.email
       ? (job.emailPredicted
           ? '&#9888;&#65039; <b style="color:#ffb84d">Predicted email, not confirmed:</b> <b style="color:#ffb84d">'+esc(job.email)+'</b>. This is a common-pattern guess based on the company\'s real domain \u2014 it may not be correct or monitored. Review carefully before sending.'
-          : 'Recruiter email found: <b style="color:#8ef0c0">'+esc(job.email)+'</b>. On approval your email app opens addressed &amp; pre-filled — you attach your CV (📎) and hit send. Browsers can’t auto-attach files; that arrives with Hiraxia’s backend.')
+          : (gmailReady
+              ? 'Recruiter email found: <b style="color:#8ef0c0">'+esc(job.email)+'</b>. On approval, a Gmail draft is created automatically with your CV already attached \u2014 just review and hit send.'
+              : 'Recruiter email found: <b style="color:#8ef0c0">'+esc(job.email)+'</b>. On approval your email app opens addressed &amp; pre-filled \u2014 you attach your CV (\ud83d\udcce) and hit send. Connect Gmail in \u2699 settings to skip that manual step \u2014 CVs attach automatically once it\'s linked.'))
       : 'This job applies on the company/board site \u2014 on approval I\'ll open the apply page and copy your message so you can paste it in.';
     document.getElementById('amMsg').value = 'Drafting your message…';
     document.getElementById('amQueue').textContent = applyQueue.length > 1
@@ -4814,27 +4806,59 @@
     var job = applyQueue[queuePos];
     if(!job) return closeModal();
     var msgTxt = document.getElementById('amMsg').value;
-    var subject = encodeURIComponent('Application: '+job.title+' — '+(cvName||'Candidate'));
+    var subjectRaw = 'Application: '+job.title+' \u2014 '+(cvName||'Candidate');
+    var subjectEncoded = encodeURIComponent(subjectRaw);
     try{ navigator.clipboard.writeText(msgTxt); }catch(e){} // message always on clipboard as backup
-    if(job.email){
+
+    function finishApprove(){
+      contacted++;
+      document.getElementById('statContacted').textContent = contacted;
+      document.getElementById('bubTrack').textContent = contacted+' contacted';
+      document.getElementById('bubRecr').textContent = contacted+' messages approved';
+      nextInQueue();
+    }
+    function fallbackMailto(){
       var isMobileDev = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
       if(isMobileDev){
         // mailto: survives the redirect into the Gmail app with the body intact
-        window.location.href = 'mailto:'+job.email+'?subject='+subject+'&body='+encodeURIComponent(msgTxt);
+        window.location.href = 'mailto:'+job.email+'?subject='+subjectEncoded+'&body='+encodeURIComponent(msgTxt);
       } else {
-        window.open('https://mail.google.com/mail/?view=cm&fs=1&to='+encodeURIComponent(job.email)+'&su='+subject+'&body='+encodeURIComponent(msgTxt), '_blank', 'noopener');
+        window.open('https://mail.google.com/mail/?view=cm&fs=1&to='+encodeURIComponent(job.email)+'&su='+subjectEncoded+'&body='+encodeURIComponent(msgTxt), '_blank', 'noopener');
       }
-      toast('Compose opened, addressed & pre-filled — tap 📎 to attach your CV, then send. (Message also copied to clipboard.)');
-    } else {
-      try{ navigator.clipboard.writeText(msgTxt); }catch(e){}
-      if(job.url) window.open(job.url, '_blank', 'noopener');
-      toast('Message copied to clipboard — apply page opened, just paste it in');
+      toast('Compose opened, addressed & pre-filled \u2014 tap \ud83d\udcce to attach your CV, then send. (Message also copied to clipboard.)');
     }
-    contacted++;
-    document.getElementById('statContacted').textContent = contacted;
-    document.getElementById('bubTrack').textContent = contacted+' contacted';
-    document.getElementById('bubRecr').textContent = contacted+' messages approved';
-    nextInQueue();
+
+    if(job.email && cvFile){
+      // Real path: if Gmail is connected, attach the actual CV file via the
+      // Gmail API and create a genuine draft \u2014 no manual attach step left.
+      // Falls back to the old mailto/compose flow the instant anything about
+      // this isn't available, so nobody ever gets stuck on a failed attempt.
+      var reader = new FileReader();
+      reader.onload = function(){
+        var base64Data = String(reader.result).split(',')[1] || '';
+        createGmailDraftWithAttachment(job.email, subjectRaw, msgTxt, base64Data, cvFile.name, cvFile.type || 'application/octet-stream')
+          .then(function(){
+            window.open('https://mail.google.com/mail/u/0/#drafts', '_blank', 'noopener');
+            toast('Draft created in Gmail with your CV already attached \u2014 just review and hit send.');
+            finishApprove();
+          })
+          .catch(function(){
+            // not connected, token expired, or the API call failed \u2014 same
+            // graceful fallback as if cvFile were never available at all
+            fallbackMailto();
+            finishApprove();
+          });
+      };
+      reader.onerror = function(){ fallbackMailto(); finishApprove(); };
+      reader.readAsDataURL(cvFile);
+    } else if(job.email){
+      fallbackMailto();
+      finishApprove();
+    } else {
+      if(job.url) window.open(job.url, '_blank', 'noopener');
+      toast('Message copied to clipboard \u2014 apply page opened, just paste it in');
+      finishApprove();
+    }
   }
   function nextInQueue(){
     queuePos++;
@@ -5187,20 +5211,15 @@
   }
 
   function transcribeWithGroq(blob){
-    var key = lsGet('hiraxia_groqKey');
-    if(!key){ toast(t('toastAddGroqKey')); return; }
-    var fd = new FormData();
-    fd.append('file', blob, 'speech.webm');
-    fd.append('model', 'whisper-large-v3-turbo');
     var input = document.getElementById('askInput');
     var prevPh = input.placeholder;
     input.placeholder = 'Transcribing\u2026';
-    return fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+    return fetch(authApiUrl('/voice-transcribe'), {
       method:'POST',
-      headers:{'Authorization':'Bearer '+key},
-      body: fd
+      headers: backendHeaders({'Content-Type': blob.type || 'audio/webm'}),
+      body: blob
     }).then(function(r){
-      if(!r.ok){ return r.text().then(function(body){ throw new Error('stt '+r.status+': '+body.slice(0,180)); }); }
+      if(!r.ok){ return r.json().catch(function(){ return {}; }).then(function(b){ throw new Error('stt '+r.status+': '+(b.error||'')); }); }
       return r.json();
     }).then(function(data){
       input.placeholder = prevPh;
@@ -5211,12 +5230,11 @@
     }).catch(function(e){
       input.placeholder = prevPh;
       console.log('Whisper transcription failed:', e.message);
-      toast('Voice input failed \u2014 check your Groq key or try typing instead');
+      toast('Voice input failed \u2014 try again or type instead');
     });
   }
 
   function startRecording(){
-    if(!lsGet('hiraxia_groqKey')){ toast(t('toastAddGroqKey')); return; }
     if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
       toast('Voice input isn\u2019t supported in this browser'); return;
     }
@@ -5267,7 +5285,6 @@
   }
 
   function startCall(){
-    if(!lsGet('hiraxia_groqKey')){ toast('Add your Groq key in \u2699 settings to start a voice call'); return; }
     if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ toast('Voice calls aren\u2019t supported in this browser'); return; }
     callActive = true;
     callOverlay.classList.add('active');
@@ -5340,14 +5357,10 @@
   function handleCallTurn(blob){
     setCallStatus('Thinking\u2026');
     setCallAvatarState('idle');
-    var key = lsGet('hiraxia_groqKey');
-    var fd = new FormData();
-    fd.append('file', blob, 'speech.webm');
-    fd.append('model', 'whisper-large-v3-turbo');
-    fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
-      method:'POST', headers:{'Authorization':'Bearer '+key}, body: fd
+    fetch(authApiUrl('/voice-transcribe'), {
+      method:'POST', headers: backendHeaders({'Content-Type': blob.type || 'audio/webm'}), body: blob
     }).then(function(r){
-      if(!r.ok){ return r.text().then(function(body){ throw new Error('stt '+r.status+': '+body.slice(0,180)); }); }
+      if(!r.ok){ return r.json().catch(function(){ return {}; }).then(function(b){ throw new Error('stt '+r.status+': '+(b.error||'')); }); }
       return r.json();
     }).then(function(data){
       if(!callActive) return;
@@ -5584,15 +5597,14 @@
   var HIRAXIA_VOICE = lsGet('hiraxia_voice') || 'austin'; // deep, coach-like default
   var ARABIC_VOICES = {en:'austin', ar:'fahad'}; // per-language default voice
   function groqSpeak(text, voiceOverride, noDirection){
-    var key = lsGet('hiraxia_groqKey');
     var isAr = (typeof HRX_LANG !== 'undefined' && HRX_LANG === 'ar');
     var v = voiceOverride || (isAr ? ARABIC_VOICES.ar : HIRAXIA_VOICE);
     var model = isAr ? 'canopylabs/orpheus-arabic-saudi' : 'canopylabs/orpheus-v1-english';
     var input = String(text).slice(0, 560); // clean text — no bracket tags (they glitch)
-    return fetch('https://api.groq.com/openai/v1/audio/speech', {
+    return fetch(authApiUrl('/voice-tts'), {
       method:'POST',
-      headers:{'Content-Type':'application/json','Authorization':'Bearer '+key},
-      body:JSON.stringify({model:model, voice:v, input:input, response_format:'wav'})
+      headers: backendHeaders({'Content-Type':'application/json'}),
+      body:JSON.stringify({model:model, voice:v, text:input})
     }).then(function(r){
       if(!r.ok){ return r.text().then(function(body){ throw new Error('tts '+r.status+': '+body.slice(0,180)); }); }
       return r.blob();
@@ -5625,26 +5637,18 @@
     _speakQueue = _speakQueue.then(function(){ return speakNow(clean); });
   }
   function speakNow(clean){
-    if(lsGet('hiraxia_groqKey')){
-      return groqSpeak(clean).catch(function(e){
-        var msg = String(e.message||'');
-        console.log('AI voice failed:', msg);
-        if(/terms/i.test(msg)) toast('\u2728 One-time step: console.groq.com \u2192 Playground \u2192 model "canopylabs/orpheus-v1-english" \u2192 accept terms.');
-        else if(/401|403/.test(msg)) toast('AI voice: Groq key rejected \u2014 re-check it in \u2699 settings');
-        else if(/429/.test(msg)) toast('\ud83d\udd0a Speaking a bit fast \u2014 using your phone\u2019s voice for this one, back to normal shortly.');
-        return deviceSpeak(clean);
-      });
-    } else {
-      return Promise.resolve(deviceSpeak(clean));
-    }
+    return groqSpeak(clean).catch(function(e){
+      var msg = String(e.message||'');
+      console.log('AI voice failed:', msg);
+      if(/429/.test(msg)) toast('\ud83d\udd0a Speaking a bit fast \u2014 using your phone\u2019s voice for this one, back to normal shortly.');
+      return deviceSpeak(clean);
+    });
   }
 
   function updateVoiceSub(){
     var sub = document.getElementById('voiceSub');
     if(!sub) return;
-    sub.textContent = lsGet('hiraxia_groqKey')
-      ? 'Voice: '+(HIRAXIA_VOICE.charAt(0).toUpperCase()+HIRAXIA_VOICE.slice(1))+' \u00b7 cinematic \u00b7 v5.6'
-      : 'Add your Groq key in \u2699 to unlock the Troy AI voice \u2014 device fallback active';
+    sub.textContent = 'Voice: '+(HIRAXIA_VOICE.charAt(0).toUpperCase()+HIRAXIA_VOICE.slice(1))+' \u00b7 cinematic';
   }
   updateVoiceSub();
 
@@ -5687,7 +5691,7 @@
       var log = JSON.parse(lsGet('hiraxia_errorLog') || '[]');
       var recent = log.slice(-5).map(function(e){ return e.t+' | '+e.kind+' | '+e.message; }).join(' ~~ ');
       return 'User note: '+(userNote||'(none)')+'\n'+
-        '[diagnostics] build='+HRX_BUILD_TAG+'; voice='+(lsGet('hiraxia_groqKey')?'ai':'device')+
+        '[diagnostics] build='+HRX_BUILD_TAG+'; voice=ai-proxied'+
         '; country='+(document.getElementById('countrySel')?document.getElementById('countrySel').value:'?')+
         '; errors=['+recent+']';
     }
@@ -5763,7 +5767,12 @@
     }
     nextBatch();
   }
-  document.getElementById('discoverBtn').addEventListener('click', runDiscovery);
+  // "Discover Real Companies" was a one-time admin tool (used during Hiraxia's
+  // own setup to find real Greenhouse/Lever tokens) \u2014 its button lived in the
+  // now-removed settings panel. Left the function itself in place, just guarded
+  // this listener so removing that button couldn't crash page load for anyone.
+  var discoverBtnEl = document.getElementById('discoverBtn');
+  if(discoverBtnEl) discoverBtnEl.addEventListener('click', runDiscovery);
 
   document.getElementById('voiceToggle').addEventListener('click', function(){
     voiceEnabled = !voiceEnabled;
