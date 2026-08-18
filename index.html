@@ -3586,27 +3586,25 @@
   }
   // ReliefWeb (OCHA): free, keyless public API built for reuse \u2014 huge NGO/UN
   // job inventory, very strong for Lebanon specifically given the NGO sector here.
-  // NOTE: as of Nov 2025 ReliefWeb requires a pre-approved appname. Using a
-  // placeholder for now \u2014 if it's rejected, that error surfaces honestly like
-  // any other source, rather than silently failing. Register a real one at
-  // reliefweb.int/contact if this keeps failing.
+  // Appname registered and approved via reliefweb.int/contact (Nov 2025 policy
+  // change requiring pre-approval) \u2014 hiraxia-jobsearch-x7k2n9, confirmed live.
   function sourceReliefWeb(q, countryName){
     var searchText = (q||'jobs') + (countryName ? ' '+countryName : '');
     // BUG FIX: this request never asked ReliefWeb for the job's actual body text,
     // so "desc" was always empty \u2014 meaning the email-in-description scanner had
     // nothing to read. ReliefWeb postings almost always have the real "how to apply"
     // instructions (including the contact email) buried in the body specifically.
-    var url = 'https://api.reliefweb.int/v2/jobs?appname=hiraxia-job-agent'+
+    var url = 'https://api.reliefweb.int/v2/jobs?appname=hiraxia-jobsearch-x7k2n9'+
       '&query[value]='+encodeURIComponent(searchText)+
       '&sort[]=date.created:desc&limit=20'+
       '&fields[include][]=title&fields[include][]=url&fields[include][]=date'+
       '&fields[include][]=country&fields[include][]=source&fields[include][]=city'+
       '&fields[include][]=body&fields[include][]=how-to-apply';
     return fetch(url).then(function(r){
-      if(!r.ok) throw new Error('HTTP '+r.status+' (may need a registered appname \u2014 see reliefweb.int/contact)');
+      if(!r.ok) throw new Error('HTTP '+r.status+' (appname hiraxia-jobsearch-x7k2n9 \u2014 check reliefweb.int/contact if this recurs)');
       return r.text().then(function(text){
         try{ return JSON.parse(text); }
-        catch(e){ throw new Error('non-JSON response (likely the appname isn\'t approved yet, even though it returned HTTP 200)'); }
+        catch(e){ throw new Error('non-JSON response from ReliefWeb'); }
       });
     }).then(function(d){
       return (d.data||[]).map(function(item){
@@ -3625,9 +3623,9 @@
   }
   // ReliefWeb's API now requires a pre-approved appname (since Nov 2025) \u2014 but
   // their public RSS feeds don't. This pulls the jobs RSS through a public CORS
-  // proxy so it works straight from the browser, no key, no backend. ReliefWeb
-  // is the single most email-apply-heavy source for Lebanon/MENA NGO roles, so
-  // this recovers that coverage while the appname approval is still pending.
+  // proxy so it works straight from the browser, no key, no backend. Kept
+  // running alongside the main JSON API (appname now approved and live) as
+  // a redundant source \u2014 doesn't hurt to have both, and RSS needs no appname.
   function sourceReliefWebRSS(q, countryName){
     var feed = 'https://reliefweb.int/jobs/rss.xml' + (q ? '?search='+encodeURIComponent(q) : '');
     return relayFetchText(feed).then(function(xmlText){
