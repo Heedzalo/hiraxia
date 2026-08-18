@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hiraxia — Terms of Use & Privacy Policy</title>
+<style>
+  :root{
+    --bg:#050510; --panel:#0c0a1c; --text:#f2effc; --text-dim:#9a94bb; --violet:#7c5cff; --border:rgba(255,255,255,0.08);
+  }
+  *{box-sizing:border-box;}
+  body{background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,'Inter',sans-serif; line-height:1.65; margin:0; padding:0;}
+  .wrap{max-width:720px; margin:0 auto; padding:40px 22px 80px;}
+  h1{font-size:28px; font-weight:800; margin-bottom:6px;}
+  .updated{color:var(--text-dim); font-size:13px; margin-bottom:34px;}
+  h2{font-size:19px; font-weight:700; margin:34px 0 10px; color:var(--violet);}
+  h3{font-size:15px; font-weight:700; margin:20px 0 6px;}
+  p, li{color:#d8d4ec; font-size:14.5px;}
+  ul{padding-left:20px; margin:8px 0;}
+  li{margin-bottom:6px;}
+  a{color:#5fe3ff;}
+  .box{background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:16px 18px; margin:18px 0;}
+  .brand{font-weight:800; font-size:22px;}
+  .brand .x{color:var(--violet);}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand">Hirax<span class="x">ia</span></div>
+  <h1>Terms of Use &amp; Privacy Policy</h1>
+  <div class="updated">Last updated: August 2026</div>
+
+  <p>Hiraxia ("we," "our," "the app") is an AI-powered job search assistant for job seekers, with a focus on Lebanon and the wider MENA region. This page explains what information Hiraxia collects, how it's used, and the choices you have — including specific detail on how Hiraxia uses Google account access, since that's held to a higher standard than most of what's below.</p>
+
+  <h2>1. What Hiraxia does</h2>
+  <p>Hiraxia helps you search for real, current job listings, evaluates how well your CV matches a given posting, drafts application messages, and — if you choose to connect your Gmail account — helps you send those applications with your CV attached, entirely under your review and control.</p>
+
+  <h2>2. Information we collect</h2>
+  <h3>If you create an account</h3>
+  <ul>
+    <li>Email address and, optionally, your name</li>
+    <li>A securely hashed password (if you sign up manually) — we never store your actual password, and we cannot see it</li>
+    <li>Your CV text, your recent search history, and your logged applications — saved so they follow you across devices</li>
+  </ul>
+  <h3>If you sign in with Google</h3>
+  <ul>
+    <li>Your name, email address, and profile picture, as provided by Google — used only to create and identify your Hiraxia account</li>
+  </ul>
+  <h3>If you use the app without an account</h3>
+  <ul>
+    <li>Your CV text and search history are kept only in your browser's local storage, on your own device. We never see or receive this data.</li>
+  </ul>
+
+  <div class="box">
+    <h2 style="margin-top:0;">3. Gmail access — exactly what it does and doesn't do</h2>
+    <p>If you choose to tap "Connect Gmail" in Hiraxia's settings, you'll be sent to Google's own consent screen, where Google — not Hiraxia — asks you to approve a specific, limited permission: <b>gmail.compose</b>.</p>
+    <p><b>What this permission allows:</b> Hiraxia can create a draft email in your Gmail account, addressed to a recruiter, with your CV attached and a message pre-filled. That draft is created directly between your device and Google's servers.</p>
+    <p><b>What this permission does NOT allow:</b></p>
+    <ul>
+      <li>Hiraxia cannot read any of your existing emails</li>
+      <li>Hiraxia cannot send anything without you personally reviewing the draft and pressing send yourself in Gmail</li>
+      <li>Hiraxia cannot access your contacts, calendar, or any other Google data</li>
+      <li>Hiraxia's own servers never see, store, or transmit the contents of the draft, your CV attachment, or your Gmail access token — this entire process happens directly in your browser, between you and Google. Hiraxia's backend is never in that path.</li>
+    </ul>
+    <p>You can revoke this access at any time from your Google Account's <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">Security &amp; permissions page</a>, or by disconnecting inside Hiraxia's settings.</p>
+  </div>
+
+  <h2>4. How we use your information</h2>
+  <ul>
+    <li>To match your CV against live job listings and rank results</li>
+    <li>To draft application messages and, if you choose, help you send them via your own connected Gmail</li>
+    <li>To save your progress (CV, searches, applications) so it's there when you come back or switch devices, if you have an account</li>
+    <li>To send a one-time email verification code if you sign up manually with an email and password</li>
+  </ul>
+  <p>We do not sell your data. We do not use your CV or job search activity for advertising. We do not share your data with employers or third parties without your explicit action (for example, when you personally approve and send an application).</p>
+
+  <h2>5. Data storage and security</h2>
+  <p>Account data is stored on MongoDB Atlas, a managed database provider, and access to it is protected by authentication. Passwords are hashed and never stored in plain text. Session tokens expire automatically. You can permanently delete your account and all associated data at any time from the account menu inside the app — this is immediate and cannot be undone.</p>
+
+  <h2>6. Third-party services Hiraxia relies on</h2>
+  <ul>
+    <li><b>Google</b> — for Sign-In and, optionally, Gmail draft creation</li>
+    <li><b>MongoDB Atlas</b> — for account and application data storage</li>
+    <li><b>Resend</b> — for sending the one-time email verification code during manual signup</li>
+    <li>Various public job listing sources (job boards and aggregator APIs) — queried to find live job postings; no personal data is sent to these sources beyond your search terms</li>
+  </ul>
+
+  <h2>7. Your choices</h2>
+  <ul>
+    <li>You can use Hiraxia without ever creating an account</li>
+    <li>You can disconnect Gmail access at any time</li>
+    <li>You can download a copy of your saved data from the account menu</li>
+    <li>You can permanently delete your account and all data from the account menu</li>
+  </ul>
+
+  <h2>8. Contact</h2>
+  <p>Questions about this policy or your data can be sent to <a href="mailto:contact@hiraxia.com">contact@hiraxia.com</a>.</p>
+
+  <h2>9. Changes to this policy</h2>
+  <p>If this policy changes in a meaningful way, we'll update the date at the top of this page.</p>
+</div>
+</body>
+</html>
