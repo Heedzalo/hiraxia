@@ -3611,7 +3611,14 @@
         var f = item.fields || {};
         var countryStr = (f.country||[]).map(function(c){ return c.name; }).join(', ');
         var sourceStr = (f.source||[]).map(function(s){ return s.name; }).join(', ');
-        var bodyText = String(f.body||'') + ' ' + String(f['how_to_apply']||'');
+        // BUG FIX: how_to_apply (where the actual application email almost
+        // always lives) used to be appended AFTER body, then the combined
+        // text got sliced to 1500 chars \u2014 on a longer posting (responsibilities,
+        // qualifications, requirements can easily run past that), the apply
+        // email at the end got silently truncated away before the email
+        // scanner ever saw it. how_to_apply goes first now so it's never the
+        // part that gets cut.
+        var bodyText = String(f['how_to_apply']||'') + ' ' + String(f.body||'');
         return {
           title: f.title||'', company: sourceStr||'ReliefWeb partner',
           loc: (f.city ? f.city+', ' : '')+(countryStr||'\u2014'),
