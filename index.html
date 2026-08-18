@@ -2414,10 +2414,30 @@
                       // this does NOT fix the browser file-input security wall, it just
                       // means Hiraxia can hand back a well-named download for the manual
                       // "Choose file" step on any job platform.
+  // Real bug found via user report: cvFile only ever lived as this in-memory
+  // variable, which resets to null on ANY full page reload — including the
+  // one Google's own OAuth login triggers when connecting Gmail. So the exact
+  // moment someone connected Gmail, the CV they'd already uploaded silently
+  // stopped being attachable, with no visible sign anything had changed.
+  // Persisting the file itself (as base64) to localStorage the moment it's
+  // picked means the auto-attach feature survives that reload intact.
+  function persistCvFileForAttachment(f){
+    if(f.size > 4 * 1024 * 1024){ return; } // ~4MB safety margin under localStorage's typical quota — skip silently, manual attach still works fine as the fallback
+    var reader = new FileReader();
+    reader.onload = function(){
+      try{
+        lsSet('hiraxia_cvFileBase64', String(reader.result).split(',')[1] || '');
+        lsSet('hiraxia_cvFileName', f.name);
+        lsSet('hiraxia_cvFileType', f.type || 'application/octet-stream');
+      }catch(e){ /* quota or private-browsing block — silent, falls back to manual attach */ }
+    };
+    reader.readAsDataURL(f);
+  }
   document.getElementById('cv-input').addEventListener('change', function(){
     var f = this.files && this.files[0];
     if(!f) return;
     cvFile = f;
+    persistCvFileForAttachment(f);
     setThinking('Reading your CV locally…', 20);
     var name = f.name.toLowerCase();
     if(name.endsWith('.pdf') && window.pdfjsLib){
@@ -4704,7 +4724,7 @@
     document.getElementById('amCvRewritePreview').textContent = '';
     document.getElementById('amCvMatchBtn').textContent = '\ud83d\udcca Check how well my CV matches this job';
     document.getElementById('amCvMatchBtn').disabled = false;
-    var gmailReady = !!(cvFile && lsGet('hiraxia_gmailRefreshToken') && lsGet('hiraxia_gmailClientId'));
+    var gmailReady = !!((cvFile || lsGet('hiraxia_cvFileBase64')) && lsGet('hiraxia_gmailRefreshToken') && lsGet('hiraxia_gmailClientId'));
     document.getElementById('amToLabel').innerHTML = job.email
       ? (job.emailPredicted
           ? '&#9888;&#65039; <b style="color:#ffb84d">Predicted email, not confirmed:</b> <b style="color:#ffb84d">'+esc(job.email)+'</b>. This is a common-pattern guess based on the company\'s real domain \u2014 it may not be correct or monitored. Review carefully before sending.'
@@ -4833,15 +4853,30 @@
       toast('Compose opened, addressed & pre-filled \u2014 tap \ud83d\udcce to attach your CV, then send. (Message also copied to clipboard.)');
     }
 
-    if(job.email && cvFile){
+    // Prefer the live File object when available (freshest data), but fall
+    // back to the persisted base64 copy \u2014 which is what actually survives
+    // a page reload, e.g. the one Google's OAuth flow itself triggers.
+    var persistedCvBase64 = lsGet('hiraxia_cvFileBase64');
+    var hasAttachableCv = !!(cvFile || persistedCvBase64);
+
+    if(job.email && hasAttachableCv){
       // Real path: if Gmail is connected, attach the actual CV file via the
       // Gmail API and create a genuine draft \u2014 no manual attach step left.
       // Falls back to the old mailto/compose flow the instant anything about
       // this isn't available, so nobody ever gets stuck on a failed attempt.
-      var reader = new FileReader();
-      reader.onload = function(){
-        var base64Data = String(reader.result).split(',')[1] || '';
-        createGmailDraftWithAttachment(job.email, subjectRaw, msgTxt, base64Data, cvFile.name, cvFile.type || 'application/octet-stream')
+      function withBase64(cb){
+        if(cvFile){
+          var reader = new FileReader();
+          reader.onload = function(){ cb(String(reader.result).split(',')[1] || '', cvFile.name, cvFile.type || 'application/octet-stream'); };
+          reader.onerror = function(){ cb(null); };
+          reader.readAsDataURL(cvFile);
+        } else {
+          cb(persistedCvBase64, lsGet('hiraxia_cvFileName') || (cvName||'CV')+'.pdf', lsGet('hiraxia_cvFileType') || 'application/octet-stream');
+        }
+      }
+      withBase64(function(base64Data, filename, mimeType){
+        if(!base64Data){ fallbackMailto(); finishApprove(); return; }
+        createGmailDraftWithAttachment(job.email, subjectRaw, msgTxt, base64Data, filename, mimeType)
           .then(function(){
             window.open('https://mail.google.com/mail/u/0/#drafts', '_blank', 'noopener');
             toast('Draft created in Gmail with your CV already attached \u2014 just review and hit send.');
@@ -4849,13 +4884,11 @@
           })
           .catch(function(){
             // not connected, token expired, or the API call failed \u2014 same
-            // graceful fallback as if cvFile were never available at all
+            // graceful fallback as if no CV were available at all
             fallbackMailto();
             finishApprove();
           });
-      };
-      reader.onerror = function(){ fallbackMailto(); finishApprove(); };
-      reader.readAsDataURL(cvFile);
+      });
     } else if(job.email){
       fallbackMailto();
       finishApprove();
