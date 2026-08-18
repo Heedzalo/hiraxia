@@ -356,6 +356,7 @@
       <div class="brand-row"><span class="brand">Hirax<span class="x">ia</span></span><span class="beta-pill">BETA</span><span class="beta-pill" id="buildMarker" style="background:#7c5cff; color:#fff; margin-left:6px;">...</span>
         <div id="langBar" style="margin-left:auto; display:flex; gap:5px;"></div>
       </div>
+      <div style="margin:-10px 0 18px; font-size:11px;"><a href="hiraxia-legal.html" target="_blank" rel="noopener" style="color:var(--text-faint); text-decoration:underline;" data-i18n="legalLinkText">Terms of Use &amp; Privacy Policy</a></div>
       <div id="accountRow" style="display:none; justify-content:flex-end; margin:0 0 16px; position:relative;">
         <div class="account-pill" id="accountPillBtn">
           <span class="account-avatar" id="accountAvatar">?</span>
@@ -749,7 +750,8 @@
       greetByName:'Welcome, {name}. Systems ready \u2014 upload your CV or start a search whenever you\u2019re ready.',
       authVerifyTagline:'We sent a 6-digit code to {email} \u2014 enter it below to activate your account.',
       authCodePh:'6-digit code', authVerifyBtn:'Verify & continue', authCodeInvalid:'Enter the 6-digit code from your email',
-      authNoCode:'Didn\u2019t get it?', authResendCode:'Resend code', authBackToSignup:'\u2190 Back', authCodeResent:'Code resent \u2014 check your email'
+      authNoCode:'Didn\u2019t get it?', authResendCode:'Resend code', authBackToSignup:'\u2190 Back', authCodeResent:'Code resent \u2014 check your email',
+      legalLinkText:'Terms of Use & Privacy Policy'
     },
     ar: { dir:'rtl', name:'\u0639\u0631\u0628\u064a',
       uploadCv:'\u0627\u0631\u0641\u0639 \u0633\u064a\u0631\u062a\u0643 \u0627\u0644\u0630\u0627\u062a\u064a\u0629', findJobs:'\u0627\u0628\u062d\u062b \u0639\u0646 \u0648\u0638\u0627\u0626\u0641 \u062c\u062f\u064a\u062f\u0629 \u0627\u0644\u0622\u0646',
@@ -873,7 +875,8 @@
       greetByName:'\u0623\u0647\u0644\u0627\u064b\u060c {name}. \u0627\u0644\u0623\u0646\u0638\u0645\u0629 \u062c\u0627\u0647\u0632\u0629 \u2014 \u0627\u0631\u0641\u0639 \u0633\u064a\u0631\u062a\u0643 \u0627\u0644\u0630\u0627\u062a\u064a\u0629 \u0623\u0648 \u0627\u0628\u062f\u0623 \u0628\u062d\u062b\u064b\u0627 \u0645\u062a\u0649 \u0634\u0626\u062a.',
       authVerifyTagline:'\u0623\u0631\u0633\u0644\u0646\u0627 \u0631\u0645\u0632\u064b\u0627 \u0645\u0643\u0648\u0651\u0646\u064b\u0627 \u0645\u0646 6 \u0623\u0631\u0642\u0627\u0645 \u0625\u0644\u0649 {email} \u2014 \u0623\u062f\u062e\u0644\u0647 \u0623\u062f\u0646\u0627\u0647 \u0644\u062a\u0641\u0639\u064a\u0644 \u062d\u0633\u0627\u0628\u0643.',
       authCodePh:'\u0631\u0645\u0632 \u0645\u0646 6 \u0623\u0631\u0642\u0627\u0645', authVerifyBtn:'\u062a\u0623\u0643\u064a\u062f \u0648\u0645\u062a\u0627\u0628\u0639\u0629', authCodeInvalid:'\u0623\u062f\u062e\u0644 \u0627\u0644\u0631\u0645\u0632 \u0627\u0644\u0645\u0643\u0648\u0651\u0646 \u0645\u0646 6 \u0623\u0631\u0642\u0627\u0645 \u0645\u0646 \u0628\u0631\u064a\u062f\u0643 \u0627\u0644\u0625\u0644\u0643\u062a\u0631\u0648\u0646\u064a',
-      authNoCode:'\u0644\u0645 \u064a\u0635\u0644\u0643\u061f', authResendCode:'\u0625\u0639\u0627\u062f\u0629 \u0625\u0631\u0633\u0627\u0644 \u0627\u0644\u0631\u0645\u0632', authBackToSignup:'\u2192 \u0631\u062c\u0648\u0639', authCodeResent:'\u0623\u064f\u0639\u064a\u062f \u0625\u0631\u0633\u0627\u0644 \u0627\u0644\u0631\u0645\u0632 \u2014 \u062a\u062d\u0642\u0642 \u0645\u0646 \u0628\u0631\u064a\u062f\u0643'
+      authNoCode:'\u0644\u0645 \u064a\u0635\u0644\u0643\u061f', authResendCode:'\u0625\u0639\u0627\u062f\u0629 \u0625\u0631\u0633\u0627\u0644 \u0627\u0644\u0631\u0645\u0632', authBackToSignup:'\u2192 \u0631\u062c\u0648\u0639', authCodeResent:'\u0623\u064f\u0639\u064a\u062f \u0625\u0631\u0633\u0627\u0644 \u0627\u0644\u0631\u0645\u0632 \u2014 \u062a\u062d\u0642\u0642 \u0645\u0646 \u0628\u0631\u064a\u062f\u0643',
+      legalLinkText:'\u0634\u0631\u0648\u0637 \u0627\u0644\u0627\u0633\u062a\u062e\u062f\u0627\u0645 \u0648\u0633\u064a\u0627\u0633\u0629 \u0627\u0644\u062e\u0635\u0648\u0635\u064a\u0629'
     },
     fr: { dir:'ltr', name:'FR',
       uploadCv:'T\u00e9l\u00e9charger votre CV', findJobs:'Trouver des offres maintenant',
@@ -997,7 +1000,8 @@
       greetByName:'Bienvenue, {name}. Syst\u00e8mes pr\u00eats \u2014 t\u00e9l\u00e9chargez votre CV ou lancez une recherche quand vous voulez.',
       authVerifyTagline:'Nous avons envoy\u00e9 un code \u00e0 6 chiffres \u00e0 {email} \u2014 saisissez-le ci-dessous pour activer votre compte.',
       authCodePh:'Code \u00e0 6 chiffres', authVerifyBtn:'V\u00e9rifier et continuer', authCodeInvalid:'Entrez le code \u00e0 6 chiffres re\u00e7u par e-mail',
-      authNoCode:'Pas re\u00e7u ?', authResendCode:'Renvoyer le code', authBackToSignup:'\u2190 Retour', authCodeResent:'Code renvoy\u00e9 \u2014 v\u00e9rifiez votre e-mail'
+      authNoCode:'Pas re\u00e7u ?', authResendCode:'Renvoyer le code', authBackToSignup:'\u2190 Retour', authCodeResent:'Code renvoy\u00e9 \u2014 v\u00e9rifiez votre e-mail',
+      legalLinkText:'Conditions d\'utilisation et politique de confidentialit\u00e9'
     },
     zh: { dir:'ltr', name:'\u4e2d\u6587',
       uploadCv:'\u4e0a\u4f20\u60a8\u7684\u7b80\u5386', findJobs:'\u7acb\u5373\u67e5\u627e\u65b0\u804c\u4f4d',
@@ -1121,7 +1125,8 @@
       greetByName:'\u6b22\u8fce\uff0c{name}\u3002\u7cfb\u7edf\u5c31\u7eea \u2014 \u968f\u65f6\u4e0a\u4f20\u60a8\u7684\u7b80\u5386\u6216\u5f00\u59cb\u641c\u7d22\u3002',
       authVerifyTagline:'\u6211\u4eec\u5df2\u5c06 6 \u4f4d\u9a8c\u8bc1\u7801\u53d1\u9001\u81f3 {email} \u2014 \u8bf7\u5728\u4e0b\u65b9\u8f93\u5165\u4ee5\u6fc0\u6d3b\u60a8\u7684\u8d26\u6237\u3002',
       authCodePh:'6 \u4f4d\u9a8c\u8bc1\u7801', authVerifyBtn:'\u9a8c\u8bc1\u5e76\u7ee7\u7eed', authCodeInvalid:'\u8bf7\u8f93\u5165\u90ae\u4ef6\u4e2d\u7684 6 \u4f4d\u9a8c\u8bc1\u7801',
-      authNoCode:'\u6ca1\u6536\u5230\uff1f', authResendCode:'\u91cd\u65b0\u53d1\u9001\u9a8c\u8bc1\u7801', authBackToSignup:'\u2190 \u8fd4\u56de', authCodeResent:'\u9a8c\u8bc1\u7801\u5df2\u91cd\u53d1 \u2014 \u8bf7\u67e5\u770b\u60a8\u7684\u90ae\u7bb1'
+      authNoCode:'\u6ca1\u6536\u5230\uff1f', authResendCode:'\u91cd\u65b0\u53d1\u9001\u9a8c\u8bc1\u7801', authBackToSignup:'\u2190 \u8fd4\u56de', authCodeResent:'\u9a8c\u8bc1\u7801\u5df2\u91cd\u53d1 \u2014 \u8bf7\u67e5\u770b\u60a8\u7684\u90ae\u7bb1',
+      legalLinkText:'\u4f7f\u7528\u6761\u6b3e\u4e0e\u9690\u79c1\u653f\u7b56'
     }
   };
   var HRX_LANG = lsGet('hiraxia_lang') || 'en';
