@@ -3232,10 +3232,11 @@
           lsSet('hiraxia_gmailAccessToken', d.access_token);
           if(d.refresh_token) lsSet('hiraxia_gmailRefreshToken', d.refresh_token);
           lsSet('hiraxia_gmailTokenExpiry', String(Date.now() + (d.expires_in||3600)*1000));
-          toast(t('toastGmailConnected'));
+          toast(d.refresh_token ? t('toastGmailConnected') : '\u26a0\ufe0f Connected, but Google didn\u2019t grant lasting access \u2014 see the note below the Gmail button.');
         } else {
           toast(t('toastGmailFailed'));
         }
+        updateGmailStatus();
         // clean the ?code= out of the URL so a refresh doesn't retry it
         window.history.replaceState({}, '', redirectUri);
       })
@@ -4570,6 +4571,7 @@
 
   document.getElementById('gmailConnectBtn').addEventListener('click', startGmailConnect);
   handleGmailOAuthCallback(); // check if we just came back from Google's consent screen
+  updateGmailStatus(); // and separately, reflect whatever's already saved from a previous session
 
   // Restore previously saved results on page load - real fix for results
   // only living in memory and disappearing on refresh/return visit. Placed
@@ -4588,12 +4590,22 @@
     }catch(e){ console.log('Could not restore saved results:', e); }
   })();
 
-  (function(){
+  function updateGmailStatus(){
     var statusEl = document.getElementById('gmailConnectStatus');
+    if(!statusEl) return;
     if(lsGet('hiraxia_gmailRefreshToken')){
-      statusEl.textContent = '\u2705 Gmail connected \u2014 drafts will include your tailored CV attached automatically.';
+      statusEl.innerHTML = '<span style="color:#8ef0c0;">\u2705 Gmail connected</span> \u2014 drafts will include your tailored CV attached automatically.';
+    } else if(lsGet('hiraxia_gmailAccessToken')){
+      // Google handed back a short-lived access token but no refresh token \u2014
+      // this happens if Google doesn't reissue one on a repeat authorization.
+      // Auto-attach will work for about an hour, then silently stop until
+      // reconnecting again \u2014 worth telling the user plainly instead of
+      // pretending everything's fully set up.
+      statusEl.innerHTML = '<span style="color:#f0c98e;">\u26a0\ufe0f Partially connected</span> \u2014 Google didn\u2019t grant lasting access this time. Auto-attach may stop working after about an hour. If reconnecting doesn\u2019t fix it, remove Hiraxia from <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener" style="color:#5fe3ff;">your Google account\u2019s connected apps</a> first, then reconnect \u2014 that forces Google to grant full access again.';
+    } else {
+      statusEl.textContent = '';
     }
-  })();
+  }
   document.getElementById('detectLocBtn').addEventListener('click', function(){
     var btn = document.getElementById('detectLocBtn');
     if(!navigator.geolocation){
@@ -4879,7 +4891,8 @@
       }
       withBase64(function(base64Data, filename, mimeType){
         if(!base64Data){
-          console.log('Gmail auto-attach skipped: no CV data available (neither a live file nor a persisted copy).');
+          console.log('Gmail auto-attach skipped: could not read the CV file into attachable data (FileReader failed or no persisted copy existed).');
+          toast('\u26a0\ufe0f Couldn\u2019t read your CV file for auto-attach \u2014 falling back to manual. Try re-uploading your CV.');
           fallbackMailto(); finishApprove(); return;
         }
         createGmailDraftWithAttachment(job.email, subjectRaw, msgTxt, base64Data, filename, mimeType)
@@ -4901,6 +4914,7 @@
       });
     } else if(job.email){
       console.log('Gmail auto-attach skipped: no CV available at all (cvFile and persisted base64 both empty).');
+      toast('\u26a0\ufe0f No CV found to attach \u2014 upload your CV first, or this one will need manual attaching.');
       fallbackMailto();
       finishApprove();
     } else {
