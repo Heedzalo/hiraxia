@@ -3186,6 +3186,15 @@
         client_id: clientId,
         redirect_uri: redirectUri,
         response_type: 'code',
+        // DO NOT add gmail.send here until Google's verification for that
+        // scope is actually approved. Requesting an unapproved restricted
+        // scope in production blocks EVERY real user from connecting at
+        // all (not just a warning) \u2014 it would break the compose flow
+        // that's currently working for everyone. Once approved, change to:
+        // scope: 'https://www.googleapis.com/auth/gmail.compose https://www.googleapis.com/auth/gmail.send',
+        // and then switch approveCurrent() to call sendGmailMessageWithAttachment()
+        // instead of createGmailDraftWithAttachment(). Existing connected
+        // users will need to reconnect once to pick up the new scope.
         scope: 'https://www.googleapis.com/auth/gmail.compose',
         code_challenge: challenge,
         code_challenge_method: 'S256',
@@ -3230,34 +3239,72 @@
   function createGmailDraftWithAttachment(toEmail, subject, bodyText, attachmentBase64, attachmentFilename, attachmentMimeType){
     return getValidGmailToken().then(function(token){
       if(!token) throw new Error('not connected');
-      var boundary = 'hiraxia_boundary_'+Date.now();
-      var mime = [
-        'To: '+toEmail,
-        'Subject: '+subject,
-        'MIME-Version: 1.0',
-        'Content-Type: multipart/mixed; boundary="'+boundary+'"',
-        '',
-        '--'+boundary,
-        'Content-Type: text/plain; charset="UTF-8"',
-        '',
-        bodyText,
-        '',
-        '--'+boundary,
-        'Content-Type: '+attachmentMimeType,
-        'Content-Transfer-Encoding: base64',
-        'Content-Disposition: attachment; filename="'+attachmentFilename+'"',
-        '',
-        attachmentBase64,
-        '',
-        '--'+boundary+'--'
-      ].join('\r\n');
-      var raw = base64url(new TextEncoder().encode(mime).buffer);
+      var raw = buildRawMimeMessage(toEmail, subject, bodyText, attachmentBase64, attachmentFilename, attachmentMimeType);
       return fetch('https://www.googleapis.com/gmail/v1/users/me/drafts', {
         method:'POST',
         headers:{'Authorization':'Bearer '+token, 'Content-Type':'application/json'},
         body: JSON.stringify({ message: { raw: raw } })
       }).then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); });
     });
+  }
+
+  // NOT YET LIVE \u2014 waiting on Google's approval of the gmail.send scope
+  // (submitted, verification pending as of writing this). Requires
+  // gmail.send specifically; gmail.compose (used above for drafts) cannot
+  // call this endpoint at all \u2014 Google's API rejects it outright, this
+  // isn't something that can be worked around client-side. Once approved,
+  // this sends immediately and permanently \u2014 no draft, no second review
+  // step, no undo. Wire this in to replace the draft call in approveCurrent()
+  // only after confirming the scope is actually live (check /auth/me-style
+  // token scopes, or just try it and watch for a 403 insufficientPermissions
+  // error, which is exactly what an unapproved scope looks like).
+  function sendGmailMessageWithAttachment(toEmail, subject, bodyText, attachmentBase64, attachmentFilename, attachmentMimeType){
+    return getValidGmailToken().then(function(token){
+      if(!token) throw new Error('not connected');
+      var raw = buildRawMimeMessage(toEmail, subject, bodyText, attachmentBase64, attachmentFilename, attachmentMimeType);
+      return fetch('https://www.googleapis.com/gmail/v1/users/me/messages/send', {
+        method:'POST',
+        headers:{'Authorization':'Bearer '+token, 'Content-Type':'application/json'},
+        body: JSON.stringify({ raw: raw })
+      }).then(function(r){
+        if(!r.ok){
+          return r.json().catch(function(){ return {}; }).then(function(d){
+            var msg = (d.error && d.error.message) || ('HTTP '+r.status);
+            // this is exactly the error an unapproved/missing scope produces
+            // \u2014 surfaced distinctly so it's obvious what's actually wrong
+            // rather than looking like a generic failure
+            if(r.status === 403) throw new Error('gmail.send not yet authorized on this account (' + msg + ') \u2014 Google verification may still be pending, or this account needs to reconnect Gmail to grant the new permission.');
+            throw new Error(msg);
+          });
+        }
+        return r.json();
+      });
+    });
+  }
+
+  function buildRawMimeMessage(toEmail, subject, bodyText, attachmentBase64, attachmentFilename, attachmentMimeType){
+    var boundary = 'hiraxia_boundary_'+Date.now();
+    var mime = [
+      'To: '+toEmail,
+      'Subject: '+subject,
+      'MIME-Version: 1.0',
+      'Content-Type: multipart/mixed; boundary="'+boundary+'"',
+      '',
+      '--'+boundary,
+      'Content-Type: text/plain; charset="UTF-8"',
+      '',
+      bodyText,
+      '',
+      '--'+boundary,
+      'Content-Type: '+attachmentMimeType,
+      'Content-Transfer-Encoding: base64',
+      'Content-Disposition: attachment; filename="'+attachmentFilename+'"',
+      '',
+      attachmentBase64,
+      '',
+      '--'+boundary+'--'
+    ].join('\r\n');
+    return base64url(new TextEncoder().encode(mime).buffer);
   }
 
   function handleGmailOAuthCallback(){
