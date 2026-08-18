@@ -3599,7 +3599,7 @@
       '&sort[]=date.created:desc&limit=20'+
       '&fields[include][]=title&fields[include][]=url&fields[include][]=date'+
       '&fields[include][]=country&fields[include][]=source&fields[include][]=city'+
-      '&fields[include][]=body&fields[include][]=how-to-apply';
+      '&fields[include][]=body&fields[include][]=how_to_apply';
     return fetch(url).then(function(r){
       if(!r.ok) throw new Error('HTTP '+r.status+' (appname hiraxia-jobsearch-x7k2n9 \u2014 check reliefweb.int/contact if this recurs)');
       return r.text().then(function(text){
@@ -3611,7 +3611,7 @@
         var f = item.fields || {};
         var countryStr = (f.country||[]).map(function(c){ return c.name; }).join(', ');
         var sourceStr = (f.source||[]).map(function(s){ return s.name; }).join(', ');
-        var bodyText = String(f.body||'') + ' ' + String(f['how-to-apply']||'');
+        var bodyText = String(f.body||'') + ' ' + String(f['how_to_apply']||'');
         return {
           title: f.title||'', company: sourceStr||'ReliefWeb partner',
           loc: (f.city ? f.city+', ' : '')+(countryStr||'\u2014'),
