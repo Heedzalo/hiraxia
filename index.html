@@ -3152,20 +3152,23 @@
     if(token && Date.now() < expiry - 60000) return Promise.resolve(token);
     var refreshToken = lsGet('hiraxia_gmailRefreshToken');
     var clientId = lsGet('hiraxia_gmailClientId');
-    if(!refreshToken || !clientId) return Promise.resolve(null);
+    if(!refreshToken || !clientId) return Promise.reject(new Error('Gmail not connected'));
     return fetch('https://oauth2.googleapis.com/token', {
       method:'POST',
       headers:{'Content-Type':'application/x-www-form-urlencoded'},
       body: new URLSearchParams({ client_id: clientId, refresh_token: refreshToken, grant_type: 'refresh_token' })
     })
-      .then(function(r){ return r.json(); })
-      .then(function(d){
-        if(!d.access_token) return null;
-        lsSet('hiraxia_gmailAccessToken', d.access_token);
-        lsSet('hiraxia_gmailTokenExpiry', String(Date.now() + (d.expires_in||3600)*1000));
-        return d.access_token;
-      })
-      .catch(function(){ return null; });
+      .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, d:d}; }); })
+      .then(function(res){
+        if(!res.ok || !res.d.access_token){
+          // surfaces the real reason (invalid_grant = revoked/expired refresh
+          // token, most commonly) instead of a bare null that hides why
+          throw new Error(res.d.error_description || res.d.error || 'token refresh failed');
+        }
+        lsSet('hiraxia_gmailAccessToken', res.d.access_token);
+        lsSet('hiraxia_gmailTokenExpiry', String(Date.now() + (res.d.expires_in||3600)*1000));
+        return res.d.access_token;
+      });
   }
 
   // Builds a real MIME email with a base64 attachment, then creates it as a Gmail
@@ -4875,21 +4878,29 @@
         }
       }
       withBase64(function(base64Data, filename, mimeType){
-        if(!base64Data){ fallbackMailto(); finishApprove(); return; }
+        if(!base64Data){
+          console.log('Gmail auto-attach skipped: no CV data available (neither a live file nor a persisted copy).');
+          fallbackMailto(); finishApprove(); return;
+        }
         createGmailDraftWithAttachment(job.email, subjectRaw, msgTxt, base64Data, filename, mimeType)
           .then(function(){
             window.open('https://mail.google.com/mail/u/0/#drafts', '_blank', 'noopener');
             toast('Draft created in Gmail with your CV already attached \u2014 just review and hit send.');
             finishApprove();
           })
-          .catch(function(){
-            // not connected, token expired, or the API call failed \u2014 same
-            // graceful fallback as if no CV were available at all
+          .catch(function(e){
+            // Show the REAL reason on-screen instead of silently swallowing
+            // it \u2014 this exact spot was reported as "still asking me to attach
+            // manually" with no visible cause, so from now on the actual
+            // failure (expired token, API rejection, etc.) surfaces directly.
+            console.log('Gmail auto-attach failed:', e.message);
+            toast('\u26a0\ufe0f Auto-attach failed (' + e.message + ') \u2014 falling back to manual. Try reconnecting Gmail in the search panel if this keeps happening.');
             fallbackMailto();
             finishApprove();
           });
       });
     } else if(job.email){
+      console.log('Gmail auto-attach skipped: no CV available at all (cvFile and persisted base64 both empty).');
       fallbackMailto();
       finishApprove();
     } else {
