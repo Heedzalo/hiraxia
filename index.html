@@ -3234,13 +3234,22 @@
           lsSet('hiraxia_gmailTokenExpiry', String(Date.now() + (d.expires_in||3600)*1000));
           toast(d.refresh_token ? t('toastGmailConnected') : '\u26a0\ufe0f Connected, but Google didn\u2019t grant lasting access \u2014 see the note below the Gmail button.');
         } else {
-          toast(t('toastGmailFailed'));
+          // Show Google's ACTUAL rejection reason instead of the old generic
+          // "check your Client ID" text \u2014 that copy is stale from before
+          // Gmail connect used the shared Client ID automatically, and it was
+          // hiding the real cause (usually a redirect_uri mismatch between
+          // the authorization step and this token-exchange step).
+          console.log('Gmail token exchange failed:', d.error, d.error_description);
+          toast('\u26a0\ufe0f Gmail connection failed: ' + (d.error_description || d.error || 'unknown error') + ' \u2014 try again.');
         }
         updateGmailStatus();
         // clean the ?code= out of the URL so a refresh doesn't retry it
         window.history.replaceState({}, '', redirectUri);
       })
-      .catch(function(){ toast(t('toastGmailFailed')); });
+      .catch(function(e){
+        console.log('Gmail token exchange request failed:', e.message);
+        toast('\u26a0\ufe0f Gmail connection failed: ' + e.message + ' \u2014 try again.');
+      });
   }
 
   function findEmailViaAnymail(companyName){
