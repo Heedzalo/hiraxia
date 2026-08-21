@@ -1869,7 +1869,7 @@
         if(!res || !res.data) return;
         var data = res.data;
         if(data.cv && data.cv.text){
-          handleCvText(data.cv.text, data.cv.filename || 'saved CV', data.cv.skills || null);
+          handleCvText(data.cv.text, data.cv.filename || 'saved CV', data.cv.skills || null, true); // true = restore, never hijacks the search box or auto-fires a search
         }
         if(data.applications && data.applications.length){
           saveAppLog(data.applications);
@@ -2416,7 +2416,7 @@
     return found.slice(0,10).map(function(f){ return f.skill; });
   }
 
-  function handleCvText(text, fname, skillsOverride){
+  function handleCvText(text, fname, skillsOverride, isRestore){
     cvText = text.slice(0, 12000);
     // BUG FIX: this used to always run the old keyword-matcher, then trigger the
     // search IMMEDIATELY within this same function — meaning even when accurate
@@ -2451,6 +2451,19 @@
     // save this CV to the account so it follows the user across devices —
     // no-op if signed out, and never blocks the UI while it saves
     if(typeof syncToBackend === 'function') syncToBackend({ cv: { text: cvText, filename: fname, skills: cvSkills, name: cvName } });
+    // Real bug found via user report: restoring an already-known CV (e.g.
+    // after signing in, or on a plain page reload) called this same function
+    // again, which unconditionally overwrote whatever the person had just
+    // typed into the search box with the CV's top skill, and immediately
+    // fired its OWN search on top of theirs \u2014 silently replacing a search
+    // for "product manager" with one for "accountant" mid-action, with no
+    // visible cause. The auto-fill-and-search behavior only makes sense the
+    // moment a CV is genuinely new (a fresh upload, or one just built) \u2014
+    // never on a restore of something already known.
+    if(isRestore){
+      renderBoardGrid();
+      return;
+    }
     if(cvSkills.length){
       document.getElementById('jobQuery').value = cvSkills[0];
       renderBoardGrid();
