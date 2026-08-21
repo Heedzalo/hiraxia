@@ -3962,6 +3962,30 @@
       .then(function(d){ return d.jobs || []; });
   }
 
+  // Real bug found via user report: sourceGoogleJobs gets called from at
+  // least four different places within one single search (the base search,
+  // the nearby-country widening pass, the city-sweep deep scan, and the
+  // remote-role pass) \u2014 all firing close together, all hitting the same
+  // /jobs backend route. The diagnostic itself showed the exact symptom:
+  // some calls succeeded in seconds while others timed out at 55s, which is
+  // classic free-tier-server-under-a-burst behavior, not a real outage. This
+  // gate limits how many /jobs calls can be in flight AT ONCE across the
+  // WHOLE search, regardless of which of the four call sites triggered them
+  // \u2014 later ones simply wait their turn instead of piling on all together.
+  var _googleJobsGate = { active: 0, limit: 3, queue: [] };
+  function throttledFetch(url, opts, timeoutMs){
+    return new Promise(function(resolve, reject){
+      function run(){
+        _googleJobsGate.active++;
+        fetchWithTimeout(url, opts, timeoutMs).then(resolve, reject).finally(function(){
+          _googleJobsGate.active--;
+          if(_googleJobsGate.queue.length) _googleJobsGate.queue.shift()();
+        });
+      }
+      if(_googleJobsGate.active < _googleJobsGate.limit) run();
+      else _googleJobsGate.queue.push(run);
+    });
+  }
   function sourceGoogleJobs(q, placeOverride, isoOverride, dateAll){
     // JSearch re-enabled - confirmed working well again (real Lebanon jobs,
     // verified emails) after their earlier outage tonight. Flip back to
@@ -3975,7 +3999,7 @@
     var isoDefault = (c.v==='sa2'?'sa':(c.v==='remote'?'':c.v));
     var payload = {query: q || 'jobs', place: place, country:(isoOverride !== undefined ? isoOverride : isoDefault), pageSize: 25, dateAll: !!dateAll};
     var base = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
-    return fetchWithTimeout(base + '/jobs', {method:'POST', headers: backendHeaders({'Content-Type':'application/json'}), body:JSON.stringify(payload)}, 55000)
+    return throttledFetch(base + '/jobs', {method:'POST', headers: backendHeaders({'Content-Type':'application/json'}), body:JSON.stringify(payload)}, 55000)
       .then(function(r){
         if(!r.ok){
           return r.json().catch(function(){ return {}; }).then(function(body){
@@ -4089,14 +4113,26 @@
   // a while (2 days) \u2014 the natural signal that it's likely expired or filled,
   // not just "wasn't in this one particular batch."
   var JOB_STALE_AFTER_MS = 48 * 60 * 60 * 1000;
-  function mergeWithPreviousResults(freshList){
+  var lastMergedQuery = null; // tracks what was actually searched last time the merge ran
+  function mergeWithPreviousResults(freshList, currentQuery){
     var now = Date.now();
-    var freshKeys = {};
+    var qNorm = String(currentQuery||'').trim().toLowerCase();
+    // Real bug found via user report: searching "Product manager" was
+    // showing ~50 leftover Accounting jobs from an earlier, completely
+    // unrelated search \u2014 the merge above was carrying over ANY still-fresh
+    // job regardless of whether it had anything to do with what's being
+    // searched now. Carrying over old results only makes sense when
+    // re-running roughly the same search; a genuinely different query
+    // should start clean, same as before this feature existed.
+    var sameSearch = lastMergedQuery !== null && qNorm === lastMergedQuery;
+    lastMergedQuery = qNorm;
     freshList.forEach(function(j){
       j.firstSeenAt = j.firstSeenAt || now;
       j.lastSeenAt = now;
-      freshKeys[(j.title+'|'+j.company).toLowerCase()] = true;
     });
+    if(!sameSearch) return dedupeJobs(freshList);
+    var freshKeys = {};
+    freshList.forEach(function(j){ freshKeys[(j.title+'|'+j.company).toLowerCase()] = true; });
     var carriedOver = allJobs.filter(function(j){
       var k = (j.title+'|'+j.company).toLowerCase();
       if(freshKeys[k]) return false; // already in the fresh batch under this key \u2014 dedupeJobs below picks the richer copy
@@ -4338,7 +4374,7 @@
         var beforeExclude = list.length;
         list = list.filter(function(j){ return !/naukrigulf/i.test(j.src||''); });
         var excludedCount = beforeExclude - list.length;
-        allJobs = mergeWithPreviousResults(list); // merged with prior results \u2014 see mergeWithPreviousResults for why
+        allJobs = mergeWithPreviousResults(list, q); // merged with prior results \u2014 but only when re-searching roughly the same thing; see mergeWithPreviousResults for why
         allJobs.forEach(function(j){ j.score = scoreJob(j); j.days = j.date ? daysAgo(j.date) : null; }); // re-score AND re-freshness-check every job in the merged pool, not just this batch \u2014 a carried-over job needs its "Xd ago" label to reflect real elapsed time, not whatever it was when first found
         allJobs.sort(function(a,b){ return (b.score - a.score) || ((a.days==null?15:a.days) - (b.days==null?15:b.days)); });
         allJobs = markAppliedJobs(allJobs.slice(0, 100)); // widened cap since the pool now accumulates over time instead of resetting each search
