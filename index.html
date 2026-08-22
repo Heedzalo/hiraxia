@@ -2775,12 +2775,38 @@
       return hit;
     }catch(e){ return null; }
   }
-  function emailCacheSet(domain, email){
+  function emailCacheSet(domain, email, verified){
     try{
       var cache = JSON.parse(lsGet('hiraxia_emailCache') || '{}');
       cache[domain] = { email: email, found: new Date().toISOString().slice(0,10) };
       lsSet('hiraxia_emailCache', JSON.stringify(cache));
     }catch(e){}
+    // Real gap found via user report: this only ever wrote to THIS browser's
+    // own localStorage \u2014 if one person's search burned real Tavily/Brave/
+    // Gamalogic credits finding and verifying a company's email, every other
+    // user searching that same company afterward started from zero and paid
+    // the same cost again. Fire-and-forget write to the shared backend cache
+    // so the discovery becomes permanent and built-in for everyone from here
+    // on, the same way the job-search cache already works.
+    try{
+      fetch(authApiUrl('/email-cache-set'), {
+        method:'POST', headers: Object.assign({'Content-Type':'application/json'}, backendHeaders()),
+        body: JSON.stringify({ domain: domain, email: email, verified: !!verified })
+      }).catch(function(){});
+    }catch(e){}
+  }
+  // Async, shared-cache counterpart to emailCacheGet \u2014 checked separately
+  // (not merged into emailCacheGet itself) since every existing call site
+  // expects a synchronous answer and changing that would mean touching many
+  // places at once. Called at the one point in the pipeline where it matters
+  // most: right after a domain is found, before spending a relayFetch +
+  // Gamalogic verification round confirming something another user may have
+  // already confirmed.
+  function emailCacheGetShared(domain){
+    return fetch(authApiUrl('/email-cache-get'), {
+      method:'POST', headers: Object.assign({'Content-Type':'application/json'}, backendHeaders()),
+      body: JSON.stringify({ domain: domain })
+    }).then(function(r){ return r.json(); }).catch(function(){ return { found:false }; });
   }
 
   // Screenshot the real page (sidesteps CORS entirely — an image isn't a cross-origin
@@ -3011,6 +3037,7 @@
     return clean + '.com';
   }
   function applyLastResortEmailGuess(jobs){
+    var guessed = [];
     jobs.forEach(function(j){
       if(j.email || !j.url) return;
       if(!JOB_BOARD_DOMAINS.test(j.url)) return; // only for gated/useless-to-open links \u2014 a real company/ATS link stays as a genuine Apply button, which already works fine
@@ -3019,8 +3046,66 @@
       j.email = 'careers@' + domain;
       j.emailPredicted = true;
       j.src = (j.src||'') + ' (predicted from company name \u2014 not verified)';
+      j._lastResortDomain = domain; // kept temporarily so the background verify pass below knows what to check
+      guessed.push(j);
     });
-    return jobs;
+    return guessed;
+  }
+  // Runs AFTER jobs are already rendered, on purpose \u2014 verification means
+  // real network calls, and search speed matters more than getting every
+  // last-resort guess upgraded to "verified" the instant it appears.
+  // Silently no-ops entirely if no Gamalogic key is set (verifyPredictedEmail
+  // already handles that), so this is always safe to call.
+  function backgroundVerifyLastResortGuesses(guessedJobs){
+    if(!guessedJobs.length || !lsGet('hiraxia_gamalogicKey')) return;
+    runWithConcurrency(guessedJobs, 3, function(j){
+      return verifyPredictedEmail(j, j._lastResortDomain).then(function(res){
+        j.src = (j.src||'').replace(' (predicted from company name \u2014 not verified)', res.verified ? ' (verified via pattern check)' : ' (predicted from company name \u2014 not verified)');
+        delete j._lastResortDomain;
+      });
+    }).then(function(){
+      if(renderJobs.lastOk !== undefined) renderJobs(renderJobs.lastOk, renderJobs.lastSrcNames); // reflect any upgrades on the visible cards
+    });
+  }
+  // Real gap found while reviewing this alongside the new last-resort
+  // guesser: Gamalogic verification used to live entirely inline inside
+  // findCompanyThenEmail's own candidate loop above \u2014 meaning it could only
+  // ever reach jobs that made it into that pipeline's ~25\u201330 candidate cap.
+  // The last-resort company-name guesses (applyLastResortEmailGuess, further
+  // down) run on the FULL list afterward and never touched this code at
+  // all, so they'd have stayed "predicted, unverified" forever even once a
+  // Gamalogic key gets added \u2014 not what was actually intended. Pulled the
+  // verification itself out into this standalone function so both paths
+  // can call the exact same real logic instead of two versions drifting
+  // apart over time.
+  function verifyPredictedEmail(j, domain){
+    var vKey = lsGet('hiraxia_gamalogicKey');
+    var patterns = ['careers@'+domain, 'hr@'+domain, 'jobs@'+domain];
+    if(!vKey){
+      j.email = patterns[0]; j.emailPredicted = true;
+      return Promise.resolve({ verified:false, note:'Gamalogic key not set - verification skipped' });
+    }
+    var base2 = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
+    return Promise.all(patterns.map(function(p){
+      return fetchWithTimeout(base2+'/verify-email', {
+        method:'POST', headers: backendHeaders({'Content-Type':'application/json'}),
+        body: JSON.stringify({ email: p, apiKey: vKey })
+      }, 8000).then(function(r){ return r.ok ? r.json() : {valid:null, error:'HTTP '+r.status}; }).catch(function(e){ return {valid:null, error:String(e.message||e).slice(0,60)}; });
+    })).then(function(results){
+      var validOnes = patterns.filter(function(p, i){ return results[i].valid === true; });
+      if(validOnes.length === 1){
+        j.email = validOnes[0]; j.emailPredicted = false; j.emailVerified = true;
+        try{ emailCacheSet(domain, validOnes[0]); }catch(e){}
+        return { verified:true, note:'predicted email VERIFIED via pattern check' };
+      }
+      j.email = patterns[0]; j.emailPredicted = true;
+      var detail = results.map(function(r,i){
+        var status = r.valid===true?'valid':r.valid===false?'invalid':r.valid==='catch-all'?'catch-all':'unknown';
+        var rawPreview = r.raw ? JSON.stringify(r.raw).slice(0,120) : (r.error||'no raw data');
+        return patterns[i].split('@')[0]+':'+status+'['+rawPreview+']';
+      }).join(', ');
+      return { verified:false, note:'verification: '+detail };
+    });
   }
   function findCompanyThenEmail(jobs){
     // BUG FIX (found via good instinct tonight): this used to SKIP job-board-hosted
@@ -3110,52 +3195,28 @@
             errors.push((j.company||j.url||'?')+': no domain found via company-name search');
             return;
           }
-          return relayFetchText(info.fetchUrl)
-            .then(function(html){
-              if(!scanText(html, 'page scan', info.domain)){
-                // Predicted-email tier: a confirmed real domain with no email
-                // found anywhere is still often reachable at a common
-                // pattern. Checks 3 candidates against Gamalogic's real
-                // verification API - if exactly ONE comes back valid while
-                // the others don't, that's real signal, upgraded to verified
-                // confidence. Catch-all domains (where every pattern "valid-
-                // ates") can't be distinguished this way, so those stay
-                // predicted rather than falsely upgraded.
-                var vKey = lsGet('hiraxia_gamalogicKey');
-                var patterns = ['careers@'+info.domain, 'hr@'+info.domain, 'jobs@'+info.domain];
-                if(!vKey){
-                  j.email = patterns[0]; j.emailPredicted = true;
-                  j.src = (j.src||'') + ' (predicted - not confirmed)';
-                  errors.push((info.domain||'?')+': no email found on page, predicted careers@ address (Gamalogic key not set - verification skipped)');
-                  return;
+          // Check the SHARED cache first \u2014 a real fetch + Gamalogic verification
+          // round is the most expensive part of this whole chain, and if any
+          // other user already confirmed this exact domain's email, there's
+          // no reason to pay that cost again.
+          return emailCacheGetShared(info.domain).then(function(shared){
+            if(shared.found){
+              j.email = shared.email; j.emailPredicted = !shared.verified; j.emailVerified = !!shared.verified;
+              j.src = (j.src||'') + ' (email via shared cache)';
+              errors.push((info.domain||'?')+': found in shared cache, no new search needed');
+              return;
+            }
+            return relayFetchText(info.fetchUrl)
+              .then(function(html){
+                if(!scanText(html, 'page scan', info.domain)){
+                  verifyPredictedEmail(j, info.domain).then(function(res){
+                    j.src = (j.src||'') + ' (' + (res.verified ? 'verified via pattern check' : 'predicted - not confirmed') + ')';
+                    errors.push((info.domain||'?')+': '+res.note);
+                  });
                 }
-                var base2 = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
-                return Promise.all(patterns.map(function(p){
-                  return fetchWithTimeout(base2+'/verify-email', {
-                    method:'POST', headers: backendHeaders({'Content-Type':'application/json'}),
-                    body: JSON.stringify({ email: p, apiKey: vKey })
-                  }, 8000).then(function(r){ return r.ok ? r.json() : {valid:null, error:'HTTP '+r.status}; }).catch(function(e){ return {valid:null, error:String(e.message||e).slice(0,60)}; });
-                })).then(function(results){
-                  var validOnes = patterns.filter(function(p, i){ return results[i].valid === true; });
-                  if(validOnes.length === 1){
-                    j.email = validOnes[0]; j.emailPredicted = false; j.emailVerified = true;
-                    j.src = (j.src||'') + ' (verified via pattern check)';
-                    try{ emailCacheSet(info.domain, validOnes[0]); }catch(e){}
-                    errors.push((info.domain||'?')+': predicted email VERIFIED via pattern check');
-                  } else {
-                    j.email = patterns[0]; j.emailPredicted = true;
-                    j.src = (j.src||'') + ' (predicted - '+(validOnes.length>1?'multiple valid patterns, ':'')+'not confirmed)';
-                    var detail = results.map(function(r,i){
-                      var status = r.valid===true?'valid':r.valid===false?'invalid':r.valid==='catch-all'?'catch-all':'unknown';
-                      var rawPreview = r.raw ? JSON.stringify(r.raw).slice(0,120) : (r.error||'no raw data');
-                      return patterns[i].split('@')[0]+':'+status+'['+rawPreview+']';
-                    }).join(', ');
-                    errors.push((info.domain||'?')+': no email found on page, predicted careers@ address (verification: '+detail+')');
-                  }
-                });
-              }
-            })
-            .catch(function(e){ errors.push((info.domain||'?')+': '+String(e.message||e).slice(0,60)); });
+              })
+              .catch(function(e){ errors.push((info.domain||'?')+': '+String(e.message||e).slice(0,60)); });
+          });
         });
       });
     }
@@ -4406,7 +4467,7 @@
         if(myGen !== searchGen) return; // a newer search has already started \u2014 this one's results are stale, don't overwrite
         if(finishProcessing._done && finishProcessing._doneGen === myGen) return; // the deadline already rendered for this search \u2014 don't render twice
         finishProcessing._done = true; finishProcessing._doneGen = myGen;
-        applyLastResortEmailGuess(list); // see this function's own comment \u2014 catches every job the capped pipeline above never got to
+        var lastResortGuesses = applyLastResortEmailGuess(list); // see this function's own comment \u2014 catches every job the capped pipeline above never got to
         list.forEach(function(j){ j.score = scoreJob(j); j.days = j.date ? daysAgo(j.date) : null; });
         list.sort(function(a,b){ return (b.score - a.score) || ((a.days==null?15:a.days) - (b.days==null?15:b.days)); });
         list.forEach(function(j){ j.applicationMethod = j.email ? 'email' : 'platform'; });
@@ -4446,6 +4507,7 @@
         if(excludedCount > 0){ console.log('Filtered out', excludedCount, 'Naukrigulf listing(s) by user preference'); }
 
         renderJobs(okSources, srcNames);
+        backgroundVerifyLastResortGuesses(lastResortGuesses); // quiet upgrade pass \u2014 see its own comment for why this happens after render, not before
         setTimeout(autoDiscoverFromResults, 400); // quiet background check, never blocks the UI
         if(fails.length){
           var sl = document.getElementById('srcLine');
