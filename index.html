@@ -2983,6 +2983,45 @@
     return null;
   }
 
+  // Real bug found via user report + screenshot: tapping "Apply" on
+  // LinkedIn-sourced jobs opened a login/signup wall instead of anything
+  // useful \u2014 LinkedIn gates almost every posting from non-logged-in
+  // visitors, on purpose, and no client-side code can bypass that; it's
+  // enforced entirely on their own servers. The real, fixable problem
+  // underneath it: findCompanyThenEmail above only processes ~25\u201330
+  // candidate jobs per search (a deliberate cap to control API cost) \u2014
+  // anything beyond that cap simply never gets an email attempt at all,
+  // leaving its ONLY "Apply" action pointed at that dead-end gated URL.
+  // This is the safety net: a zero-API-cost pass over the FULL, uncapped
+  // job list, right before rendering. Any job whose apply link is a known
+  // job-board/gated domain (LinkedIn, Indeed, Bayt, etc. \u2014 same list
+  // already used to skip pointless screenshot attempts) and which still
+  // has no email at all gets a same-pattern predicted address guessed
+  // directly from the company name, so "Apply" always leads somewhere
+  // real instead of a wall, even for jobs the paid pipeline never reached.
+  function guessDomainFromCompanyName(company){
+    if(!company) return null;
+    var clean = String(company).toLowerCase()
+      .replace(/\([^)]*\)/g, ' ') // strip parenthetical notes, e.g. "BD (Becton, Dickinson and Co.)"
+      .replace(/[^a-z0-9\s&-]/g, '')
+      .replace(/\b(inc|llc|ltd|corp|corporation|company|co|group|holding|holdings|international|global|sarl|plc)\b\.?/g, '')
+      .trim()
+      .replace(/\s+/g, '');
+    if(!clean || clean.length < 2) return null;
+    return clean + '.com';
+  }
+  function applyLastResortEmailGuess(jobs){
+    jobs.forEach(function(j){
+      if(j.email || !j.url) return;
+      if(!JOB_BOARD_DOMAINS.test(j.url)) return; // only for gated/useless-to-open links \u2014 a real company/ATS link stays as a genuine Apply button, which already works fine
+      var domain = guessDomainFromCompanyName(j.company);
+      if(!domain) return;
+      j.email = 'careers@' + domain;
+      j.emailPredicted = true;
+      j.src = (j.src||'') + ' (predicted from company name \u2014 not verified)';
+    });
+    return jobs;
+  }
   function findCompanyThenEmail(jobs){
     // BUG FIX (found via good instinct tonight): this used to SKIP job-board-hosted
     // listings (Indeed, JobLeads, etc.) entirely \u2014 sending them straight to the
@@ -3021,14 +3060,18 @@
       }
 
       // STEP 1 \u2014 the job's OWN posting page, always, even on a job board.
-      // Two things come from this one fetch: (a) the REAL hiring company's
-      // name from the page's structured data \u2014 often better than the API's
-      // generic label \u2014 and (b) an apply email, but ONLY if the page
-      // explicitly says to email a CV there (strict=true). A listing page
-      // belongs to the job board, not the employer, so any OTHER email
-      // sitting on it is noise, not a real signal \u2014 confirmed by a real
-      // false-positive during testing (a generic contact@ address grabbed
-      // with zero connection to actually applying).
+      // Confirmed directly by user testing: LinkedIn's login wall is a
+      // browser/JS-driven thing that only appears after the page has
+      // already rendered \u2014 the raw HTML this fetch grabs (no browser, no
+      // JS execution) reliably includes the real company name every time,
+      // well before any of that kicks in. So this stays for every job,
+      // gated board or not \u2014 it's a genuinely reliable, low-risk source for
+      // the company name specifically, even on LinkedIn. Finding an actual
+      // EMAIL on a job-board page is a different story (a listing page
+      // belongs to the board, not the employer, so scanText below only
+      // trusts explicit "email your CV to X" language, strict=true) \u2014 that
+      // part just naturally finds nothing on a gated page and moves on to
+      // Step 2, no separate handling needed.
       var embeddedName = null;
       var step1 = j.url
         ? relayFetchText(j.url).then(function(html){
@@ -4363,6 +4406,7 @@
         if(myGen !== searchGen) return; // a newer search has already started \u2014 this one's results are stale, don't overwrite
         if(finishProcessing._done && finishProcessing._doneGen === myGen) return; // the deadline already rendered for this search \u2014 don't render twice
         finishProcessing._done = true; finishProcessing._doneGen = myGen;
+        applyLastResortEmailGuess(list); // see this function's own comment \u2014 catches every job the capped pipeline above never got to
         list.forEach(function(j){ j.score = scoreJob(j); j.days = j.date ? daysAgo(j.date) : null; });
         list.sort(function(a,b){ return (b.score - a.score) || ((a.days==null?15:a.days) - (b.days==null?15:b.days)); });
         list.forEach(function(j){ j.applicationMethod = j.email ? 'email' : 'platform'; });
