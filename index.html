@@ -3054,10 +3054,11 @@
   // Runs AFTER jobs are already rendered, on purpose \u2014 verification means
   // real network calls, and search speed matters more than getting every
   // last-resort guess upgraded to "verified" the instant it appears.
-  // Silently no-ops entirely if no Gamalogic key is set (verifyPredictedEmail
-  // already handles that), so this is always safe to call.
+  // verifyPredictedEmail itself now safely no-ops via the backend's own
+  // "not configured" response if GAMALOGIC_KEY isn't set yet, so there's no
+  // longer a frontend key to gate on here at all.
   function backgroundVerifyLastResortGuesses(guessedJobs){
-    if(!guessedJobs.length || !lsGet('hiraxia_gamalogicKey')) return;
+    if(!guessedJobs.length) return;
     runWithConcurrency(guessedJobs, 3, function(j){
       return verifyPredictedEmail(j, j._lastResortDomain).then(function(res){
         j.src = (j.src||'').replace(' (predicted from company name \u2014 not verified)', res.verified ? ' (verified via pattern check)' : ' (predicted from company name \u2014 not verified)');
@@ -3079,23 +3080,30 @@
   // can call the exact same real logic instead of two versions drifting
   // apart over time.
   function verifyPredictedEmail(j, domain){
-    var vKey = lsGet('hiraxia_gamalogicKey');
     var patterns = ['careers@'+domain, 'hr@'+domain, 'jobs@'+domain];
-    if(!vKey){
-      j.email = patterns[0]; j.emailPredicted = true;
-      return Promise.resolve({ verified:false, note:'Gamalogic key not set - verification skipped' });
-    }
+    // Real gap found while reviewing this: this used to check the frontend's
+    // own localStorage for a Gamalogic key \u2014 a value that could only ever
+    // be set through a settings-panel field removed entirely a while back,
+    // meaning verification was silently unreachable for every single user,
+    // forever, no matter what key existed. Now it always asks the backend,
+    // which uses its own shared GAMALOGIC_KEY \u2014 same pattern as every other
+    // shared key in the app. If that env var isn't set yet, the backend
+    // itself says so plainly instead of this failing silently again.
     var base2 = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
     return Promise.all(patterns.map(function(p){
       return fetchWithTimeout(base2+'/verify-email', {
         method:'POST', headers: backendHeaders({'Content-Type':'application/json'}),
-        body: JSON.stringify({ email: p, apiKey: vKey })
+        body: JSON.stringify({ email: p })
       }, 8000).then(function(r){ return r.ok ? r.json() : {valid:null, error:'HTTP '+r.status}; }).catch(function(e){ return {valid:null, error:String(e.message||e).slice(0,60)}; });
     })).then(function(results){
+      if(results[0] && results[0].configured === false){
+        j.email = patterns[0]; j.emailPredicted = true;
+        return { verified:false, note:'GAMALOGIC_KEY not set on server - verification skipped' };
+      }
       var validOnes = patterns.filter(function(p, i){ return results[i].valid === true; });
       if(validOnes.length === 1){
         j.email = validOnes[0]; j.emailPredicted = false; j.emailVerified = true;
-        try{ emailCacheSet(domain, validOnes[0]); }catch(e){}
+        try{ emailCacheSet(domain, validOnes[0], true); }catch(e){}
         return { verified:true, note:'predicted email VERIFIED via pattern check' };
       }
       j.email = patterns[0]; j.emailPredicted = true;
