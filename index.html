@@ -2978,8 +2978,15 @@
       || html.match(/<meta[^>]+content=["']([^"']{2,80})["'][^>]+property=["']og:site_name["']/i);
     if(m && m[1]){
       var name = m[1].trim();
-      // skip when og:site_name is just the job board's own brand
-      if(!/indeed|linkedin|glassdoor|bayt|remotive|jobicy|arbeitnow|workable|greenhouse|lever|jooble|careerjet|remoteok|muse|jobs?\b/i.test(name)) return name;
+      // Real bug found via user report + screenshot: a "Confidential"
+      // HireLebanese listing had its correct company field overwritten with
+      // "HireLebanese.com" \u2014 the site's OWN og:site_name meta tag, mistaken
+      // for the real employer. This exclusion list was a separate, older,
+      // incomplete copy that predated HireLebanese (and every other source
+      // added since) being a source at all \u2014 now reuses the one shared,
+      // actively-maintained list instead of a second one that silently drifts
+      // out of sync every time a new source gets added.
+      if(!AGGREGATOR_BRAND_WORDS.test(name)) return name;
     }
     return null;
   }
