@@ -3809,6 +3809,21 @@
       .then(function(r){ return r.ok ? r.json() : {jobs:[]}; })
       .then(function(d){ return d.jobs || []; });
   }
+  // HireLebanese \u2014 a real, live, server-rendered Lebanon-specific job board.
+  // Confirmed directly via live testing to return current, real listings,
+  // several with an explicit apply email already visible in the snippet.
+  // Genuinely different value from the bigger aggregators: it's a board most
+  // of them barely surface, and unlike LinkedIn it isn't login/JS-gated, so
+  // the existing email-finding pipeline can reliably read its pages too.
+  function sourceHireLebanese(q){
+    var base = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
+    return fetchWithTimeout(base+'/hirelebanese-jobs', {
+      method:'POST', headers: backendHeaders({'Content-Type':'application/json'}),
+      body: JSON.stringify({ query: q||'' })
+    }, 15000)
+      .then(function(r){ return r.ok ? r.json() : {jobs:[]}; })
+      .then(function(d){ return d.jobs || []; });
+  }
   function sourceJobsPipe(q, countryIso){
     var base = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
     return fetchWithTimeout(base+'/jobspipe-jobs', {
@@ -4320,7 +4335,8 @@
       {n:'TheMuse', p:sourceMuse(q)},
       {n:'Himalayas', p:new Promise(function(res){ setTimeout(function(){ res(sourceHimalayas(q)); }, 300); }).then(function(p){ return p; })},
       {n:'RemoteJobs.org', p:new Promise(function(res){ setTimeout(function(){ res(sourceRemoteJobsOrg(q)); }, 600); }).then(function(p){ return p; })},
-      {n:'JobsPipe', p:new Promise(function(res){ setTimeout(function(){ res(sourceJobsPipe(q, (c.v==='sa2'?'sa':(c.v==='remote'?'':c.v)))); }, 900); }).then(function(p){ return p; })}
+      {n:'JobsPipe', p:new Promise(function(res){ setTimeout(function(){ res(sourceJobsPipe(q, (c.v==='sa2'?'sa':(c.v==='remote'?'':c.v)))); }, 900); }).then(function(p){ return p; })},
+      (c.v==='lb' ? {n:'HireLebanese', p:new Promise(function(res){ setTimeout(function(){ res(sourceHireLebanese(q)); }, 1200); }).then(function(p){ return p; })} : null)
     ];
     // self-service ATS boards: add whatever tokens the user has saved in settings
     (lsGet('hiraxia_greenhouseTokens') || 'careem,tamara').split(',').map(function(t){ return t.trim(); }).filter(Boolean).slice(0,15).forEach(function(tok){
