@@ -3824,11 +3824,11 @@
     }, 15000)
       .then(function(r){ return r.ok ? r.json() : {jobs:[]}; })
       .then(function(d){
-        // Surfaces the backend's own diagnostic evidence (real HTTP status,
-        // response classification, byte length, regex match counts, sample
-        // matched hrefs) into the visible diagnostics panel \u2014 same pattern
-        // already used for JobsPipe/GoogleJobs empty-response debugging.
-        if(d.hirelebaneseDiag) window.__hireLebaneseDiag = d.hirelebaneseDiag;
+        // Now matches the same pattern as every other source's debug info
+        // (JobsPipe, GoogleJobs): only surfaces into the visible diagnostics
+        // when there's actually nothing to show \u2014 a working search stays
+        // clean instead of dumping a large diagnostic blob every single time.
+        if((!d.jobs || !d.jobs.length) && d.hirelebaneseDiag) window.__hireLebaneseDiag = d.hirelebaneseDiag;
         return d.jobs || [];
       });
   }
@@ -4291,6 +4291,32 @@
     return list;
   }
 
+  // Real gap found via user report: HireLebanese found 40 real, correctly-
+  // parsed jobs for a search, but only 7 actually appeared on screen \u2014 not
+  // a bug, just genuine competition. The visible list is the top N by score
+  // across EVERY active source combined, and a single search can easily
+  // pull 400-500+ total candidates once every Greenhouse board, Jooble,
+  // Remotive, etc. are all counted \u2014 HireLebanese's local-market jobs were
+  // simply outcompeted for slots by sheer volume from bigger global sources.
+  // This guarantees HireLebanese specifically always gets its best-scoring
+  // jobs included (up to the given minimum), added on TOP of the normal
+  // top-N cap rather than displacing other genuinely good matches.
+  function capWithSourceGuarantee(jobs, totalCap, guaranteedSrc, guaranteedMin){
+    guaranteedSrc = guaranteedSrc || 'HireLebanese';
+    guaranteedMin = guaranteedMin || 30;
+    var sortFn = function(a,b){ return (b.score - a.score) || ((a.days==null?15:a.days) - (b.days==null?15:b.days)); };
+    var sorted = jobs.slice().sort(sortFn);
+    var top = sorted.slice(0, totalCap);
+    var alreadyIncluded = top.length;
+    var guaranteedCount = top.filter(function(j){ return j.src === guaranteedSrc; }).length;
+    if(guaranteedCount < guaranteedMin){
+      var need = guaranteedMin - guaranteedCount;
+      var extras = sorted.slice(totalCap).filter(function(j){ return j.src === guaranteedSrc; }).slice(0, need);
+      top = top.concat(extras).sort(sortFn); // re-sort so the extras land in their correct relative position, not just tacked on the end
+    }
+    return top;
+  }
+
   var pendingSearchAfterCountry = false; // true while waiting for the user to answer "which country?"
   function runLiveSearch(){
     var myGen = ++searchGen; // this search's ticket number \u2014 checked before every render below
@@ -4514,8 +4540,8 @@
         var excludedCount = beforeExclude - list.length;
         allJobs = mergeWithPreviousResults(list, q); // merged with prior results \u2014 but only when re-searching roughly the same thing; see mergeWithPreviousResults for why
         allJobs.forEach(function(j){ j.score = scoreJob(j); j.days = j.date ? daysAgo(j.date) : null; }); // re-score AND re-freshness-check every job in the merged pool, not just this batch \u2014 a carried-over job needs its "Xd ago" label to reflect real elapsed time, not whatever it was when first found
-        allJobs.sort(function(a,b){ return (b.score - a.score) || ((a.days==null?15:a.days) - (b.days==null?15:b.days)); });
-        allJobs = markAppliedJobs(allJobs.slice(0, 100)); // widened cap since the pool now accumulates over time instead of resetting each search
+        allJobs = capWithSourceGuarantee(allJobs, 100); // top 100 overall, but HireLebanese gets a protected minimum \u2014 see this function's own comment for why
+        allJobs = markAppliedJobs(allJobs);
         // Real gap found via user report: results only lived in page memory,
         // so a refresh or return visit wiped everything. Saving here so they
         // persist until a new search runs or the user clears their browser
@@ -5894,8 +5920,7 @@
         extra = extra.filter(function(j){ return !j.date || daysAgo(j.date) <= 20; });
         var merged = dedupeJobs(allJobs.concat(extra));
         merged.forEach(function(j){ j.score = scoreJob(j); j.days = j.date ? daysAgo(j.date) : null; });
-        merged.sort(function(a,b){ return (b.score - a.score) || ((a.days==null?15:a.days) - (b.days==null?15:b.days)); });
-        allJobs = markAppliedJobs(merged.slice(0, 100)); // same widened cap + applied-status marking as the main search path
+        allJobs = markAppliedJobs(capWithSourceGuarantee(merged, 100)); // same cap + HireLebanese guarantee as the main search path
         // Real bug found via user report: renderJobs(0,[]) below sets
         // srcLine to an EMPTY string (okSources=0 is falsy), wiping out
         // everything the main search already built there right before the
