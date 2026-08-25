@@ -4304,14 +4304,21 @@
   function capWithSourceGuarantee(jobs, totalCap, guaranteedSrc, guaranteedMin){
     guaranteedSrc = guaranteedSrc || 'HireLebanese';
     guaranteedMin = guaranteedMin || 30;
+    // Real bug found via user report: the email-finding pipeline runs BEFORE
+    // this function and routinely appends extra text onto j.src (e.g.
+    // "HireLebanese (predicted from company name \u2014 not verified)") \u2014 an
+    // exact === match against the bare "HireLebanese" string silently missed
+    // almost every job whose src had already been appended to, which was
+    // most of them. A prefix check catches the source regardless of
+    // whatever gets tacked on afterward.
+    function isGuaranteedSrc(j){ return j.src && j.src.indexOf(guaranteedSrc) === 0; }
     var sortFn = function(a,b){ return (b.score - a.score) || ((a.days==null?15:a.days) - (b.days==null?15:b.days)); };
     var sorted = jobs.slice().sort(sortFn);
     var top = sorted.slice(0, totalCap);
-    var alreadyIncluded = top.length;
-    var guaranteedCount = top.filter(function(j){ return j.src === guaranteedSrc; }).length;
+    var guaranteedCount = top.filter(isGuaranteedSrc).length;
     if(guaranteedCount < guaranteedMin){
       var need = guaranteedMin - guaranteedCount;
-      var extras = sorted.slice(totalCap).filter(function(j){ return j.src === guaranteedSrc; }).slice(0, need);
+      var extras = sorted.slice(totalCap).filter(isGuaranteedSrc).slice(0, need);
       top = top.concat(extras).sort(sortFn); // re-sort so the extras land in their correct relative position, not just tacked on the end
     }
     return top;
