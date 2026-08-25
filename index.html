@@ -4347,6 +4347,7 @@
     window.__googleJobsEmptyDebug = null;
     window.__jobsPipeEmptyDebug = null;
     window.__hireLebaneseDiag = null;
+    window.__hlCountTrace = null;
     if(!lsGet('hiraxia_countryConfirmed')){
       // never guessed, never asked before — the honest move is to ask directly,
       // not silently search whatever the default happens to be
@@ -4545,9 +4546,19 @@
         var beforeExclude = list.length;
         list = list.filter(function(j){ return !/naukrigulf/i.test(j.src||''); });
         var excludedCount = beforeExclude - list.length;
+        // Temporary targeted diagnostic \u2014 testing a specific hypothesis: is
+        // cross-listing dedup (same title+company) collapsing many of
+        // HireLebanese's raw results before the source-guarantee ever sees
+        // them? If the "before" count here is much higher than what
+        // capWithSourceGuarantee later reports, that confirms it.
+        var hlBeforeMerge = list.filter(function(j){ return j.src && j.src.indexOf('HireLebanese')===0; }).length;
         allJobs = mergeWithPreviousResults(list, q); // merged with prior results \u2014 but only when re-searching roughly the same thing; see mergeWithPreviousResults for why
+        var hlAfterMerge = allJobs.filter(function(j){ return j.src && j.src.indexOf('HireLebanese')===0; }).length;
         allJobs.forEach(function(j){ j.score = scoreJob(j); j.days = j.date ? daysAgo(j.date) : null; }); // re-score AND re-freshness-check every job in the merged pool, not just this batch \u2014 a carried-over job needs its "Xd ago" label to reflect real elapsed time, not whatever it was when first found
         allJobs = capWithSourceGuarantee(allJobs, 100); // top 100 overall, but HireLebanese gets a protected minimum \u2014 see this function's own comment for why
+        var hlAfterCap = allJobs.filter(function(j){ return j.src && j.src.indexOf('HireLebanese')===0; }).length;
+        window.__hlCountTrace = 'HireLebanese count trace: before-merge='+hlBeforeMerge+', after-dedup='+hlAfterMerge+', after-guarantee='+hlAfterCap;
+        console.log(window.__hlCountTrace);
         allJobs = markAppliedJobs(allJobs);
         // Real gap found via user report: results only lived in page memory,
         // so a refresh or return visit wiped everything. Saving here so they
@@ -4606,6 +4617,10 @@
         if(window.__screenshotDebug){
           var sl4 = document.getElementById('srcLine');
           sl4.textContent = (sl4.textContent ? sl4.textContent+' \u00b7 ' : '') + window.__screenshotDebug;
+        }
+        if(window.__hlCountTrace){
+          var sl8 = document.getElementById('srcLine');
+          sl8.textContent = (sl8.textContent ? sl8.textContent+' \u00b7 ' : '') + window.__hlCountTrace;
         }
         btn.disabled = false; btn.textContent = 'Find Fresh Jobs Now';
         if(window.__hiraxiaExcite) window.__hiraxiaExcite(0.3);
