@@ -2040,6 +2040,7 @@
           window.__domainSearchInfo = 'Backend version: '+(d.backendVersion||'unknown (old backend, predates version tracking)')+
             (window.__googleJobsEmptyDebug && window.__googleJobsEmptyDebug.length ? ' \u00b7 GoogleJobs empty responses: '+window.__googleJobsEmptyDebug.join(' | ') : '')+
             (window.__jobsPipeEmptyDebug ? ' \u00b7 '+window.__jobsPipeEmptyDebug : '')+
+            (window.__hireLebaneseDiag ? ' \u00b7 HireLebanese diag: '+JSON.stringify(window.__hireLebaneseDiag) : '')+
             ' \u00b7 Domain search: Serper key '+(d.serperConfigured?'configured':'NOT configured on Render')+
             ', Brave key '+(d.braveConfigured?'configured':'NOT configured on Render')+
             ', Tavily key '+(d.tavilyConfigured?'configured':'NOT configured on Render')+
@@ -3822,7 +3823,14 @@
       body: JSON.stringify({ query: q||'' })
     }, 15000)
       .then(function(r){ return r.ok ? r.json() : {jobs:[]}; })
-      .then(function(d){ return d.jobs || []; });
+      .then(function(d){
+        // Surfaces the backend's own diagnostic evidence (real HTTP status,
+        // response classification, byte length, regex match counts, sample
+        // matched hrefs) into the visible diagnostics panel \u2014 same pattern
+        // already used for JobsPipe/GoogleJobs empty-response debugging.
+        if(d.hirelebaneseDiag) window.__hireLebaneseDiag = d.hirelebaneseDiag;
+        return d.jobs || [];
+      });
   }
   function sourceJobsPipe(q, countryIso){
     var base = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
@@ -4305,6 +4313,7 @@
     window.__domainSearchInfo = null;
     window.__googleJobsEmptyDebug = null;
     window.__jobsPipeEmptyDebug = null;
+    window.__hireLebaneseDiag = null;
     if(!lsGet('hiraxia_countryConfirmed')){
       // never guessed, never asked before — the honest move is to ask directly,
       // not silently search whatever the default happens to be
