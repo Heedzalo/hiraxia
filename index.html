@@ -3092,10 +3092,17 @@
   // not just guessing from its name. Runs before the pattern-check
   // verification below since a real page-scan is strictly better evidence
   // than confirming a guess is merely plausible.
-  function backgroundPageScanHireLebanese(guessedJobs){
-    var hlJobs = guessedJobs.filter(function(j){ return j.src && j.src.indexOf('HireLebanese')===0 && j.url; });
-    if(!hlJobs.length) return Promise.resolve();
-    return runWithConcurrency(hlJobs, 3, function(j){
+  // Generalized from the original HireLebanese-only version \u2014 same real
+  // page-scan logic, now reusable for any source. WebSearch results
+  // specifically need this: Serper only returns page titles/snippets, not
+  // real structured job data, so reading each job's actual page directly
+  // (same strict, explicit-instruction-only extraction already proven on
+  // HireLebanese) is what turns a rough web result into a real, usable
+  // application email \u2014 not a guess, an actual instruction read off the page.
+  function backgroundPageScanBySource(jobs, srcPrefix){
+    var matching = jobs.filter(function(j){ return j.src && j.src.indexOf(srcPrefix)===0 && j.url; });
+    if(!matching.length) return Promise.resolve();
+    return runWithConcurrency(matching, 3, function(j){
       return relayFetchText(j.url).then(function(html){
         var found = extractEmailFromText(html, true); // strict \u2014 only a real, explicit apply instruction counts
         if(found){
@@ -3110,6 +3117,7 @@
       if(renderJobs.lastOk !== undefined) renderJobs(renderJobs.lastOk, renderJobs.lastSrcNames);
     });
   }
+  function backgroundPageScanHireLebanese(guessedJobs){ return backgroundPageScanBySource(guessedJobs, 'HireLebanese'); }
   function backgroundVerifyLastResortGuesses(guessedJobs){
     if(!guessedJobs.length) return;
     // Pattern-check verification only for whichever of these still don't
@@ -3892,6 +3900,45 @@
         return d.jobs || [];
       });
   }
+  // Real web search source \u2014 confirmed decision: runs on EVERY search, not
+  // just niche categories. Genuinely different from every other source
+  // here: those are structured job APIs; this is general web search via
+  // Serper, so raw results are page titles/snippets, not clean structured
+  // listings. Real emails come from the background page-scan pass
+  // (backgroundPageScanBySource) actually reading each result's page,
+  // exactly the same proven approach already built for HireLebanese \u2014
+  // reused here, not duplicated.
+  function sourceWebSearchJobs(q, location){
+    var base = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
+    return fetchWithTimeout(base+'/websearch-jobs', {
+      method:'POST', headers: backendHeaders({'Content-Type':'application/json'}),
+      body: JSON.stringify({ query: q||'', location: location||'' })
+    }, 15000)
+      .then(function(r){ return r.ok ? r.json() : {jobs:[]}; })
+      .then(function(d){
+        var jobs = d.jobs || [];
+        // Real gap found via user report (asking whether country-priority
+        // scoring applies here): the backend was tagging EVERY result with
+        // the same generic search-location string, regardless of what that
+        // specific result is actually about \u2014 meaning the existing in-
+        // country scoring boost (scoreJob's geoMatchStrict check) would have
+        // applied uniformly to all of them, accurate or not. This checks
+        // each result's own title+desc text against the same real
+        // country/city keyword list already used for CV-location-detection
+        // and the country dropdown, and only overrides the generic location
+        // when a genuinely more specific match is found in that result's
+        // own text \u2014 otherwise leaves the honest generic fallback in place.
+        jobs.forEach(function(j){
+          var hay = (j.title+' '+j.desc).toLowerCase();
+          for(var i=1;i<countries.length;i++){ // skip index 0 (remote/worldwide \u2014 not a real match signal)
+            var country = countries[i];
+            var hit = country.keys.some(function(k){ return hay.indexOf(k)>-1; });
+            if(hit){ j.loc = country.label.replace(/^[^ ]+ /,''); break; } // real match found in this specific result's own text \u2014 use it instead of the generic search-location default
+          }
+        });
+        return jobs;
+      });
+  }
   function sourceJobsPipe(q, countryIso){
     var base = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
     return fetchWithTimeout(base+'/jobspipe-jobs', {
@@ -4358,30 +4405,35 @@
   // pull 400-500+ total candidates once every Greenhouse board, Jooble,
   // Remotive, etc. are all counted \u2014 HireLebanese's local-market jobs were
   // simply outcompeted for slots by sheer volume from bigger global sources.
-  // This guarantees HireLebanese specifically always gets its best-scoring
-  // jobs included (up to the given minimum), added on TOP of the normal
+  // This guarantees specific sources always get their best-scoring jobs
+  // included (up to each one's own minimum), added on TOP of the normal
   // top-N cap rather than displacing other genuinely good matches.
-  function capWithSourceGuarantee(jobs, totalCap, guaranteedSrc, guaranteedMin){
-    guaranteedSrc = guaranteedSrc || 'HireLebanese';
-    guaranteedMin = guaranteedMin || 30;
-    // Real bug found via user report: the email-finding pipeline runs BEFORE
-    // this function and routinely appends extra text onto j.src (e.g.
-    // "HireLebanese (predicted from company name \u2014 not verified)") \u2014 an
-    // exact === match against the bare "HireLebanese" string silently missed
-    // almost every job whose src had already been appended to, which was
-    // most of them. A prefix check catches the source regardless of
-    // whatever gets tacked on afterward.
-    function isGuaranteedSrc(j){ return j.src && j.src.indexOf(guaranteedSrc) === 0; }
+  // Generalized to accept multiple guarantee rules at once (e.g. HireLebanese
+  // AND WebSearch, each with their own 30-job floor) \u2014 originally supported
+  // only one source at a time.
+  function capWithSourceGuarantee(jobs, totalCap, guaranteeRules){
+    guaranteeRules = guaranteeRules || [{ src: 'HireLebanese', min: 30 }];
     var sortFn = function(a,b){ return (b.score - a.score) || ((a.days==null?15:a.days) - (b.days==null?15:b.days)); };
     var sorted = jobs.slice().sort(sortFn);
     var top = sorted.slice(0, totalCap);
-    var guaranteedCount = top.filter(isGuaranteedSrc).length;
-    if(guaranteedCount < guaranteedMin){
-      var need = guaranteedMin - guaranteedCount;
-      var extras = sorted.slice(totalCap).filter(isGuaranteedSrc).slice(0, need);
-      top = top.concat(extras).sort(sortFn); // re-sort so the extras land in their correct relative position, not just tacked on the end
-    }
-    return top;
+    // Real bug found via user report: the email-finding pipeline runs BEFORE
+    // this function and routinely appends extra text onto j.src (e.g.
+    // "HireLebanese (predicted from company name \u2014 not verified)") \u2014 an
+    // exact === match against the bare source name silently missed almost
+    // every job whose src had already been appended to. A prefix check
+    // catches the source regardless of whatever gets tacked on afterward.
+    guaranteeRules.forEach(function(rule){
+      function isGuaranteedSrc(j){ return j.src && j.src.indexOf(rule.src) === 0; }
+      var guaranteedCount = top.filter(isGuaranteedSrc).length;
+      if(guaranteedCount < rule.min){
+        var need = rule.min - guaranteedCount;
+        var alreadyIn = {};
+        top.forEach(function(j){ if(isGuaranteedSrc(j)) alreadyIn[j.url] = true; });
+        var extras = sorted.filter(function(j){ return isGuaranteedSrc(j) && !alreadyIn[j.url]; }).slice(0, need);
+        top = top.concat(extras);
+      }
+    });
+    return top.sort(sortFn); // one final sort so every guarantee rule's extras land in their correct relative position together, not just tacked on the end
   }
 
   var pendingSearchAfterCountry = false; // true while waiting for the user to answer "which country?"
@@ -4474,7 +4526,8 @@
       {n:'Himalayas', p:new Promise(function(res){ setTimeout(function(){ res(sourceHimalayas(q)); }, 300); }).then(function(p){ return p; })},
       {n:'RemoteJobs.org', p:new Promise(function(res){ setTimeout(function(){ res(sourceRemoteJobsOrg(q)); }, 600); }).then(function(p){ return p; })},
       {n:'JobsPipe', p:new Promise(function(res){ setTimeout(function(){ res(sourceJobsPipe(q, (c.v==='sa2'?'sa':(c.v==='remote'?'':c.v)))); }, 900); }).then(function(p){ return p; })},
-      (c.v==='lb' ? {n:'HireLebanese', p:new Promise(function(res){ setTimeout(function(){ res(sourceHireLebanese(q)); }, 1200); }).then(function(p){ return p; })} : null)
+      (c.v==='lb' ? {n:'HireLebanese', p:new Promise(function(res){ setTimeout(function(){ res(sourceHireLebanese(q)); }, 1200); }).then(function(p){ return p; })} : null),
+      {n:'WebSearch', p:new Promise(function(res){ setTimeout(function(){ res(sourceWebSearchJobs(q, curCity() || c.gj || '')); }, 1500); }).then(function(p){ return p; })}
     ];
     // Bounded query-expansion pass \u2014 see getSynonymForQuery's own comment.
     // Only the two highest-volume sources, only when a real match is found,
@@ -4667,7 +4720,7 @@
         allJobs = mergeWithPreviousResults(list, q); // merged with prior results \u2014 but only when re-searching roughly the same thing; see mergeWithPreviousResults for why
         var hlAfterMerge = allJobs.filter(function(j){ return j.src && j.src.indexOf('HireLebanese')===0; }).length;
         allJobs.forEach(function(j){ j.score = scoreJob(j); j.days = j.date ? daysAgo(j.date) : null; }); // re-score AND re-freshness-check every job in the merged pool, not just this batch \u2014 a carried-over job needs its "Xd ago" label to reflect real elapsed time, not whatever it was when first found
-        allJobs = capWithSourceGuarantee(allJobs, 100); // top 100 overall, but HireLebanese gets a protected minimum \u2014 see this function's own comment for why
+        allJobs = capWithSourceGuarantee(allJobs, 100, [{src:'HireLebanese', min:30}, {src:'WebSearch', min:30}]); // top 100 overall, but HireLebanese and WebSearch each get a protected minimum \u2014 see this function's own comment for why
         var hlAfterCap = allJobs.filter(function(j){ return j.src && j.src.indexOf('HireLebanese')===0; }).length;
         window.__hlCountTrace = 'HireLebanese count trace: before-merge='+hlBeforeMerge+', after-dedup='+hlAfterMerge+', after-guarantee='+hlAfterCap;
         console.log(window.__hlCountTrace);
@@ -4696,16 +4749,25 @@
         if(excludedCount > 0){ console.log('Filtered out', excludedCount, 'Naukrigulf listing(s) by user preference'); }
 
         renderJobs(okSources, srcNames);
-        // Broader than lastResortGuesses alone: covers every HireLebanese job
-        // still missing a real, confirmed email at this point \u2014 not just the
-        // subset that happened to get a weak company-name guess. A job that
-        // got skipped by findCompanyThenEmail's own candidate cap entirely
-        // (no guess attempted at all) still deserves a real page-scan
-        // attempt, since HireLebanese pages are confirmed reliably fetchable.
+        // Broader than lastResortGuesses alone: covers every HireLebanese/
+        // WebSearch job still missing a real, confirmed email at this point
+        // \u2014 not just the subset that happened to get a weak guess. A job
+        // that got skipped by findCompanyThenEmail's own candidate cap
+        // entirely (no guess attempted at all) still deserves a real
+        // page-scan attempt. WebSearch results in particular NEED this,
+        // since Serper only ever returns a title/snippet, never a real
+        // email on its own \u2014 the actual email only ever comes from reading
+        // the real page directly, same as the proven HireLebanese approach.
         var hlStillNeedsRealScan = allJobs.filter(function(j){
           return j.src && j.src.indexOf('HireLebanese')===0 && (!j.email || j.emailPredicted);
         });
-        backgroundPageScanHireLebanese(hlStillNeedsRealScan).then(function(){
+        var wsStillNeedsRealScan = allJobs.filter(function(j){
+          return j.src && j.src.indexOf('WebSearch')===0 && (!j.email || j.emailPredicted);
+        });
+        Promise.all([
+          backgroundPageScanBySource(hlStillNeedsRealScan, 'HireLebanese'),
+          backgroundPageScanBySource(wsStillNeedsRealScan, 'WebSearch')
+        ]).then(function(){
           backgroundVerifyLastResortGuesses(lastResortGuesses); // quiet upgrade pass for whatever's left \u2014 see its own comment for why this happens after render, not before
         });
         setTimeout(autoDiscoverFromResults, 400); // quiet background check, never blocks the UI
@@ -6073,7 +6135,7 @@
         extra = extra.filter(function(j){ return !j.date || daysAgo(j.date) <= 20; });
         var merged = dedupeJobs(allJobs.concat(extra));
         merged.forEach(function(j){ j.score = scoreJob(j); j.days = j.date ? daysAgo(j.date) : null; });
-        allJobs = markAppliedJobs(capWithSourceGuarantee(merged, 100)); // same cap + HireLebanese guarantee as the main search path
+        allJobs = markAppliedJobs(capWithSourceGuarantee(merged, 100, [{src:'HireLebanese', min:30}, {src:'WebSearch', min:30}])); // same cap + guarantees as the main search path
         // Real bug found via user report: renderJobs(0,[]) below sets
         // srcLine to an EMPTY string (okSources=0 is falsy), wiping out
         // everything the main search already built there right before the
