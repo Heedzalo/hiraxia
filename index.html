@@ -2649,7 +2649,13 @@
     // isn't the one meant for applying. Patterns below are drawn from real
     // informal job postings (the common phrasing this style of listing uses).
     var intentPatterns = [
-      /(?:send|share|email|forward)(?:\s+(?:your|us\s+your|their))?\s+(?:cv|resume|curriculum\s+vitae|credentials|portfolio)s?[^.\n]{0,40}?(?:to|on|at)\s*:?\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i,
+      // Real bug found via user report + screenshot: "Send CV: emil@general-
+      // mix.com" \u2014 a genuinely explicit apply instruction printed right on
+      // the job page \u2014 was never being caught, because this pattern required
+      // the literal word "to"/"on"/"at" before the colon. That phrasing skips
+      // straight from "CV" to the colon with no connector word at all, which
+      // is common informal real-world phrasing, not an edge case.
+      /(?:send|share|email|forward)(?:\s+(?:your|us\s+your|their))?\s+(?:cv|resume|curriculum\s+vitae|credentials|portfolio)s?[^.\n]{0,40}?(?:(?:to|on|at)\s*:?|:)\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i,
       /(?:apply|applying)(?:\s+now)?[^.\n]{0,40}?(?:by\s+)?(?:emailing|sending|email(?:ing)?\s+(?:your\s+)?(?:cv|resume))[^.\n]{0,25}?(?:to|at)?\s*:?\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i,
       /interested\s+candidates?[^.\n]{0,60}?(?:submit|send|email)[^.\n]{0,40}?(?:to|at)\s*:?\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i,
       /(?:apply|application)s?\s*:?\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i
@@ -3046,17 +3052,27 @@
   }
   function applyLastResortEmailGuess(jobs){
     var guessed = [];
+    // Targeted diagnostic \u2014 tracing exactly why a specific HireLebanese
+    // "Confidential" job lost its email and fell back to platform-apply,
+    // when guessDomainFromCompanyName("Confidential") should still produce
+    // a (garbage but present) fallback guess. Tracks the exact rejection
+    // reason per HireLebanese job that reaches this function with no email.
+    var hlSkipReasons = { alreadyHadEmail:0, notJobBoardUrl:0, noDomainGuessed:0, guessed:0 };
     jobs.forEach(function(j){
-      if(j.email || !j.url) return;
-      if(!JOB_BOARD_DOMAINS.test(j.url)) return; // only for gated/useless-to-open links \u2014 a real company/ATS link stays as a genuine Apply button, which already works fine
+      var isHl = j.src && j.src.indexOf('HireLebanese')===0;
+      if(j.email || !j.url){ if(isHl && j.email) hlSkipReasons.alreadyHadEmail++; return; }
+      if(!JOB_BOARD_DOMAINS.test(j.url)){ if(isHl) hlSkipReasons.notJobBoardUrl++; return; } // only for gated/useless-to-open links \u2014 a real company/ATS link stays as a genuine Apply button, which already works fine
       var domain = guessDomainFromCompanyName(j.company);
-      if(!domain) return;
+      if(!domain){ if(isHl) hlSkipReasons.noDomainGuessed++; return; }
       j.email = 'careers@' + domain;
       j.emailPredicted = true;
       j.src = (j.src||'') + ' (predicted from company name \u2014 not verified)';
       j._lastResortDomain = domain; // kept temporarily so the background verify pass below knows what to check
+      if(isHl) hlSkipReasons.guessed++;
       guessed.push(j);
     });
+    window.__hlLastResortTrace = 'HireLebanese last-resort trace: alreadyHadEmail='+hlSkipReasons.alreadyHadEmail+', notJobBoardUrl='+hlSkipReasons.notJobBoardUrl+', noDomainGuessed='+hlSkipReasons.noDomainGuessed+', guessed='+hlSkipReasons.guessed;
+    console.log(window.__hlLastResortTrace);
     return guessed;
   }
   // Runs AFTER jobs are already rendered, on purpose \u2014 verification means
@@ -3065,9 +3081,46 @@
   // verifyPredictedEmail itself now safely no-ops via the backend's own
   // "not configured" response if GAMALOGIC_KEY isn't set yet, so there's no
   // longer a frontend key to gate on here at all.
+  // Real gap found via user report: a HireLebanese job with an explicit,
+  // real apply email printed directly on its own page ("Send CV: X@Y.com")
+  // still fell back to a weak company-name-based guess \u2014 because
+  // findCompanyThenEmail's real page-scan only ever reaches its own capped
+  // ~25\u201330 candidates per search, and this job simply wasn't one of them.
+  // Unlike LinkedIn (login-gated) or Bayt/Daleel Madani (bot-blocked),
+  // HireLebanese pages are confirmed plain, fetchable HTML \u2014 so it's worth
+  // actually reading every HireLebanese job's own page in the background,
+  // not just guessing from its name. Runs before the pattern-check
+  // verification below since a real page-scan is strictly better evidence
+  // than confirming a guess is merely plausible.
+  function backgroundPageScanHireLebanese(guessedJobs){
+    var hlJobs = guessedJobs.filter(function(j){ return j.src && j.src.indexOf('HireLebanese')===0 && j.url; });
+    if(!hlJobs.length) return Promise.resolve();
+    return runWithConcurrency(hlJobs, 3, function(j){
+      return relayFetchText(j.url).then(function(html){
+        var found = extractEmailFromText(html, true); // strict \u2014 only a real, explicit apply instruction counts
+        if(found){
+          j.email = found;
+          j.emailPredicted = false;
+          j.emailVerified = false; // a real instruction, not pattern-verified, but not a guess either \u2014 tagged distinctly below
+          j.src = (j.src||'').replace(' (predicted from company name \u2014 not verified)', ' (email via job page)');
+          delete j._lastResortDomain; // found a real email \u2014 no need for the pattern-check verification pass afterward
+        }
+      }).catch(function(){}); // a failed fetch here just leaves the existing weak guess in place \u2014 never worse off than before
+    }).then(function(){
+      if(renderJobs.lastOk !== undefined) renderJobs(renderJobs.lastOk, renderJobs.lastSrcNames);
+    });
+  }
   function backgroundVerifyLastResortGuesses(guessedJobs){
     if(!guessedJobs.length) return;
-    runWithConcurrency(guessedJobs, 3, function(j){
+    // Pattern-check verification only for whichever of these still don't
+    // have a real, confirmed email \u2014 backgroundPageScanHireLebanese (called
+    // separately, first, at this function's call site) already upgrades
+    // any HireLebanese job it can with a real page-scanned email, clearing
+    // _lastResortDomain on success, so this naturally only processes what's
+    // actually still just a guess.
+    var stillNeedsVerification = guessedJobs.filter(function(j){ return j._lastResortDomain; });
+    if(!stillNeedsVerification.length) return;
+    runWithConcurrency(stillNeedsVerification, 3, function(j){
       return verifyPredictedEmail(j, j._lastResortDomain).then(function(res){
         j.src = (j.src||'').replace(' (predicted from company name \u2014 not verified)', res.verified ? ' (verified via pattern check)' : ' (predicted from company name \u2014 not verified)');
         delete j._lastResortDomain;
@@ -4355,6 +4408,8 @@
     window.__jobsPipeEmptyDebug = null;
     window.__hireLebaneseDiag = null;
     window.__hlCountTrace = null;
+    window.__hlEarlyTrace = null;
+    window.__hlLastResortTrace = null;
     if(!lsGet('hiraxia_countryConfirmed')){
       // never guessed, never asked before — the honest move is to ask directly,
       // not silently search whatever the default happens to be
@@ -4545,14 +4600,22 @@
         list.forEach(function(j){ j.score = scoreJob(j); j.days = j.date ? daysAgo(j.date) : null; });
         list.sort(function(a,b){ return (b.score - a.score) || ((a.days==null?15:a.days) - (b.days==null?15:b.days)); });
         list.forEach(function(j){ j.applicationMethod = j.email ? 'email' : 'platform'; });
+        // Pinpointing exactly which filter accounts for the 40\u219227 HireLebanese
+        // drop reported by the user \u2014 tracking the count through each of the
+        // two filters that run before the existing merge/dedup checkpoint.
+        var hlAtStart = list.filter(function(j){ return j.src && j.src.indexOf('HireLebanese')===0; }).length;
         var beforePayFilter = list.length;
         list = list.filter(function(j){ return !isPayToApply(j); });
         var payFiltered = beforePayFilter - list.length;
+        var hlAfterPayFilter = list.filter(function(j){ return j.src && j.src.indexOf('HireLebanese')===0; }).length;
         // Naukrigulf: excluded entirely — its own account-creation flow is
         // the exact kind of high-friction wall Hiraxia is built to avoid.
         var beforeExclude = list.length;
         list = list.filter(function(j){ return !/naukrigulf/i.test(j.src||''); });
         var excludedCount = beforeExclude - list.length;
+        var hlAfterNaukrigulfFilter = list.filter(function(j){ return j.src && j.src.indexOf('HireLebanese')===0; }).length;
+        window.__hlEarlyTrace = 'HireLebanese early trace: at-start='+hlAtStart+', after-payFilter='+hlAfterPayFilter+', after-naukrigulfFilter='+hlAfterNaukrigulfFilter;
+        console.log(window.__hlEarlyTrace);
         // Temporary targeted diagnostic \u2014 testing a specific hypothesis: is
         // cross-listing dedup (same title+company) collapsing many of
         // HireLebanese's raw results before the source-guarantee ever sees
@@ -4591,7 +4654,18 @@
         if(excludedCount > 0){ console.log('Filtered out', excludedCount, 'Naukrigulf listing(s) by user preference'); }
 
         renderJobs(okSources, srcNames);
-        backgroundVerifyLastResortGuesses(lastResortGuesses); // quiet upgrade pass \u2014 see its own comment for why this happens after render, not before
+        // Broader than lastResortGuesses alone: covers every HireLebanese job
+        // still missing a real, confirmed email at this point \u2014 not just the
+        // subset that happened to get a weak company-name guess. A job that
+        // got skipped by findCompanyThenEmail's own candidate cap entirely
+        // (no guess attempted at all) still deserves a real page-scan
+        // attempt, since HireLebanese pages are confirmed reliably fetchable.
+        var hlStillNeedsRealScan = allJobs.filter(function(j){
+          return j.src && j.src.indexOf('HireLebanese')===0 && (!j.email || j.emailPredicted);
+        });
+        backgroundPageScanHireLebanese(hlStillNeedsRealScan).then(function(){
+          backgroundVerifyLastResortGuesses(lastResortGuesses); // quiet upgrade pass for whatever's left \u2014 see its own comment for why this happens after render, not before
+        });
         setTimeout(autoDiscoverFromResults, 400); // quiet background check, never blocks the UI
         if(fails.length){
           var sl = document.getElementById('srcLine');
@@ -4628,6 +4702,14 @@
         if(window.__hlCountTrace){
           var sl8 = document.getElementById('srcLine');
           sl8.textContent = (sl8.textContent ? sl8.textContent+' \u00b7 ' : '') + window.__hlCountTrace;
+        }
+        if(window.__hlEarlyTrace){
+          var sl9 = document.getElementById('srcLine');
+          sl9.textContent = (sl9.textContent ? sl9.textContent+' \u00b7 ' : '') + window.__hlEarlyTrace;
+        }
+        if(window.__hlLastResortTrace){
+          var sl10 = document.getElementById('srcLine');
+          sl10.textContent = (sl10.textContent ? sl10.textContent+' \u00b7 ' : '') + window.__hlLastResortTrace;
         }
         btn.disabled = false; btn.textContent = 'Find Fresh Jobs Now';
         if(window.__hiraxiaExcite) window.__hiraxiaExcite(0.3);
