@@ -4385,6 +4385,39 @@
   }
 
   var pendingSearchAfterCountry = false; // true while waiting for the user to answer "which country?"
+  // Real gap found via user report: a search like "aircraft technician"
+  // returns almost nothing, not because those jobs don't exist, but because
+  // recruiters use many different real-world terms for the same role (AME,
+  // avionics technician, B1/B2 technician, etc.) and Hiraxia only ever
+  // searched the literal words typed. Modest, bounded fix \u2014 not a full
+  // "read the open web" system (that would multiply real API cost across
+  // every search from every user, not just niche ones): a small curated
+  // synonym table, and when a match is found, ONE extra pass through just
+  // the two highest-volume sources (GoogleJobs, Jooble) with the best
+  // alternate term, merged into the same results. Extensible \u2014 add more
+  // clusters here as real gaps get found, same evidence-first pattern as
+  // everything else this session.
+  var ROLE_SYNONYM_CLUSTERS = [
+    { triggers: ['aircraft technician','aircraft mechanic','aircraft maintenance','aviation technician','avionics','airframe technician','ame ','b1 technician','b2 technician','mro technician'],
+      alt: 'aircraft maintenance engineer' },
+    { triggers: ['accountant','accounting'], alt: 'bookkeeper' },
+    { triggers: ['software engineer','software developer'], alt: 'software developer' },
+    { triggers: ['sales manager','sales executive'], alt: 'business development manager' },
+    { triggers: ['hr manager','human resources'], alt: 'people operations manager' },
+    { triggers: ['graphic designer'], alt: 'visual designer' },
+    { triggers: ['customer service','customer support'], alt: 'customer success' }
+  ];
+  function getSynonymForQuery(q){
+    var norm = String(q||'').trim().toLowerCase();
+    if(!norm) return null;
+    for(var i=0;i<ROLE_SYNONYM_CLUSTERS.length;i++){
+      var cluster = ROLE_SYNONYM_CLUSTERS[i];
+      for(var j=0;j<cluster.triggers.length;j++){
+        if(norm.indexOf(cluster.triggers[j]) > -1 && norm !== cluster.alt) return cluster.alt;
+      }
+    }
+    return null;
+  }
   function runLiveSearch(){
     var myGen = ++searchGen; // this search's ticket number \u2014 checked before every render below
     // Real fix for the pattern found via user report: multiple unrelated
@@ -4443,6 +4476,15 @@
       {n:'JobsPipe', p:new Promise(function(res){ setTimeout(function(){ res(sourceJobsPipe(q, (c.v==='sa2'?'sa':(c.v==='remote'?'':c.v)))); }, 900); }).then(function(p){ return p; })},
       (c.v==='lb' ? {n:'HireLebanese', p:new Promise(function(res){ setTimeout(function(){ res(sourceHireLebanese(q)); }, 1200); }).then(function(p){ return p; })} : null)
     ];
+    // Bounded query-expansion pass \u2014 see getSynonymForQuery's own comment.
+    // Only the two highest-volume sources, only when a real match is found,
+    // so this can't quietly become an unbounded cost multiplier on every
+    // ordinary search.
+    var synonymQ = getSynonymForQuery(q);
+    if(synonymQ){
+      named.push({n:'GoogleJobs\u00b7synonym', p:sourceGoogleJobs(synonymQ)});
+      named.push({n:'Jooble\u00b7synonym', p:sourceJooble(synonymQ, (curCity() ? curCity()+(c.gj?', '+c.gj:'') : (c.gj || '')))});
+    }
     // self-service ATS boards: add whatever tokens the user has saved in settings
     (lsGet('hiraxia_greenhouseTokens') || 'careem,tamara').split(',').map(function(t){ return t.trim(); }).filter(Boolean).slice(0,15).forEach(function(tok){
       named.push({ n:'Greenhouse\u00b7'+tok, p:sourceGreenhouse(tok, q) });
