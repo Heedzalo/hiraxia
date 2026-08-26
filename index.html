@@ -3908,36 +3908,60 @@
   // (backgroundPageScanBySource) actually reading each result's page,
   // exactly the same proven approach already built for HireLebanese \u2014
   // reused here, not duplicated.
+  //
+  // Cascading fallback added per explicit request: a genuinely thin/niche
+  // market (e.g. aircraft maintenance in Lebanon specifically, which has
+  // one small airport and one airline) shouldn't just come back with
+  // nothing. Search the selected country first; only if that comes back
+  // thin, widen to a MENA-wide pass; only if THAT'S still thin, widen to a
+  // fully global pass. Each tier only fires if the one before it was
+  // genuinely weak \u2014 a search that already found plenty in-country never
+  // triggers the wider (costlier) tiers at all, so this stays cheap for the
+  // common case and only spends more when there's actually little to find.
   function sourceWebSearchJobs(q, location){
     var base = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
-    return fetchWithTimeout(base+'/websearch-jobs', {
-      method:'POST', headers: backendHeaders({'Content-Type':'application/json'}),
-      body: JSON.stringify({ query: q||'', location: location||'' })
-    }, 15000)
-      .then(function(r){ return r.ok ? r.json() : {jobs:[]}; })
-      .then(function(d){
-        var jobs = d.jobs || [];
-        // Real gap found via user report (asking whether country-priority
-        // scoring applies here): the backend was tagging EVERY result with
-        // the same generic search-location string, regardless of what that
-        // specific result is actually about \u2014 meaning the existing in-
-        // country scoring boost (scoreJob's geoMatchStrict check) would have
-        // applied uniformly to all of them, accurate or not. This checks
-        // each result's own title+desc text against the same real
-        // country/city keyword list already used for CV-location-detection
-        // and the country dropdown, and only overrides the generic location
-        // when a genuinely more specific match is found in that result's
-        // own text \u2014 otherwise leaves the honest generic fallback in place.
-        jobs.forEach(function(j){
-          var hay = (j.title+' '+j.desc).toLowerCase();
-          for(var i=1;i<countries.length;i++){ // skip index 0 (remote/worldwide \u2014 not a real match signal)
-            var country = countries[i];
-            var hit = country.keys.some(function(k){ return hay.indexOf(k)>-1; });
-            if(hit){ j.loc = country.label.replace(/^[^ ]+ /,''); break; } // real match found in this specific result's own text \u2014 use it instead of the generic search-location default
-          }
+    var THIN_THRESHOLD = 5; // fewer than this many real results counts as "came back weak" \u2014 worth widening rather than accepting as final
+    function oneSearch(loc, tierLabel){
+      return fetchWithTimeout(base+'/websearch-jobs', {
+        method:'POST', headers: backendHeaders({'Content-Type':'application/json'}),
+        body: JSON.stringify({ query: q||'', location: loc||'' })
+      }, 15000)
+        .then(function(r){ return r.ok ? r.json() : {jobs:[]}; })
+        .then(function(d){
+          var jobs = d.jobs || [];
+          // Real gap found via user report (asking whether country-priority
+          // scoring applies here): the backend was tagging EVERY result with
+          // the same generic search-location string, regardless of what that
+          // specific result is actually about \u2014 meaning the existing in-
+          // country scoring boost (scoreJob's geoMatchStrict check) would have
+          // applied uniformly to all of them, accurate or not. This checks
+          // each result's own title+desc text against the same real
+          // country/city keyword list already used for CV-location-detection
+          // and the country dropdown, and only overrides the generic location
+          // when a genuinely more specific match is found in that result's
+          // own text \u2014 otherwise leaves the honest generic fallback in place.
+          jobs.forEach(function(j){
+            var hay = (j.title+' '+j.desc).toLowerCase();
+            for(var i=1;i<countries.length;i++){ // skip index 0 (remote/worldwide \u2014 not a real match signal)
+              var country = countries[i];
+              var hit = country.keys.some(function(k){ return hay.indexOf(k)>-1; });
+              if(hit){ j.loc = country.label.replace(/^[^ ]+ /,''); break; }
+            }
+            if(tierLabel) j.src = 'WebSearch\u00b7' + tierLabel; // visible on the card itself which tier actually found it
+          });
+          return jobs;
         });
-        return jobs;
+    }
+    return oneSearch(location, null).then(function(countryResults){
+      if(countryResults.length >= THIN_THRESHOLD) return countryResults;
+      return oneSearch('Middle East', 'MENA-widened').then(function(menaResults){
+        var combined = countryResults.concat(menaResults);
+        if(combined.length >= THIN_THRESHOLD) return combined;
+        return oneSearch('', 'Global-widened').then(function(globalResults){
+          return combined.concat(globalResults);
+        });
       });
+    });
   }
   function sourceJobsPipe(q, countryIso){
     var base = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
