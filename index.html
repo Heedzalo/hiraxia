@@ -3187,7 +3187,58 @@
       if(renderJobs.lastOk !== undefined) renderJobs(renderJobs.lastOk, renderJobs.lastSrcNames);
     });
   }
-  function backgroundPageScanHireLebanese(guessedJobs){ return backgroundPageScanBySource(guessedJobs, 'HireLebanese'); }
+  // Real ask: a structured production diagnostic \u2014 exact categorized
+  // counts per email-source-type, plus real cost-per-successful-email,
+  // computed directly from the actual job objects and the running stat
+  // trackers already built (window.__enrichStats), not estimated or
+  // hand-parsed from a raw dump afterward.
+  function buildProductionDiagnosticReport(jobs, rawCount, uniqueCount){
+    var relevant = jobs.filter(function(j){ return !j.isStretch; });
+    function srcHas(j, tag){ return (j.src||'').indexOf(tag) > -1; }
+    var directPage = relevant.filter(function(j){ return j.email && (srcHas(j,'email via job page') || srcHas(j,'email via homepage scan')); });
+    var officialDomain = relevant.filter(function(j){ return j.email && srcHas(j,'email via company site') && !directPage.includes(j); });
+    var sameEmployer = relevant.filter(function(j){ return j.email && srcHas(j,'email via same-employer match'); });
+    var guessed = relevant.filter(function(j){ return j.email && j.emailPredicted; });
+    var noEmail = relevant.filter(function(j){ return !j.email; });
+    var accountedFor = directPage.concat(officialDomain, sameEmployer, guessed);
+    var otherReal = relevant.filter(function(j){ return j.email && !j.emailPredicted && accountedFor.indexOf(j)===-1; }); // has a real email but none of the above tags matched (e.g. came pre-filled from a source API directly)
+    var withEmail = relevant.filter(function(j){ return j.email; });
+    var STRONG_PREFIX = /^(careers?|recruit(?:ing|ment)?|talent|hr|jobs)@/i;
+    var strong = withEmail.filter(function(j){ return STRONG_PREFIX.test(j.email); });
+    var generic = withEmail.filter(function(j){ return !STRONG_PREFIX.test(j.email); });
+
+    var stats = window.__enrichStats || { companiesEnriched:0, serperQueries:0, domainsFound:0 };
+    var costPerEmail = withEmail.length ? (stats.serperQueries/withEmail.length).toFixed(2) : 'n/a';
+
+    var lines = [
+      'PRODUCTION DIAGNOSTIC',
+      'Jobs discovered (raw, pre-dedup): '+rawCount,
+      'Unique after dedupe: '+uniqueCount,
+      'Relevant (non-stretch): '+relevant.length,
+      '',
+      'Email results:',
+      '  Direct job-page email: '+directPage.length,
+      '  Official-company-site email: '+officialDomain.length,
+      '  Reused from same employer: '+sameEmployer.length,
+      '  From a source API directly (unattributed): '+otherReal.length,
+      '  Guessed (not confirmed): '+guessed.length,
+      '  No email: '+noEmail.length,
+      '',
+      '  Strong recruiting-style emails (careers/hr/recruitment/talent/jobs@): '+strong.length,
+      '  Generic emails (info@/contact@/other): '+generic.length,
+      '',
+      'Enrichment cost:',
+      '  Companies enriched: '+stats.companiesEnriched,
+      '  Serper queries used: '+stats.serperQueries,
+      '  Domains found: '+stats.domainsFound,
+      '  Real (non-guessed) emails found: '+withEmail.filter(function(j){return !j.emailPredicted;}).length,
+      '  Serper queries per real email found: '+costPerEmail
+    ];
+    window.__productionDiagReport = lines.join('\n');
+    console.log(window.__productionDiagReport);
+    var sl = document.getElementById('srcLine');
+    if(sl) sl.textContent = (sl.textContent ? sl.textContent+' \u00b7 ' : '') + 'Full production diagnostic logged to console (window.__productionDiagReport)';
+  }
   function backgroundVerifyLastResortGuesses(guessedJobs){
     if(!guessedJobs.length) return;
     // Pattern-check verification only for whichever of these still don't
@@ -4741,7 +4792,9 @@
         }
       });
 
+      var rawJobsCount = jobs.length; // before dedup \u2014 total raw jobs across every source, duplicates included
       jobs = dedupeJobs(jobs).filter(function(j){ return !j.date || daysAgo(j.date) <= 20; });
+      var uniqueJobsCount = jobs.length; // after dedup, still includes off-field "stretch" fillers at this point
 
       function processAndFinish(list, widened){
         if(c.keys.length){
@@ -4940,7 +4993,9 @@
           // target: only fires for whatever still has no email after the
           // job's-own-page scan above \u2014 tries the company's real domain +
           // real site next, rather than settling for a weak guess.
-          deepEnrichWebSearchJobs(allJobs);
+          deepEnrichWebSearchJobs(allJobs).then(function(){
+            buildProductionDiagnosticReport(allJobs, rawJobsCount, uniqueJobsCount);
+          });
           backgroundVerifyLastResortGuesses(lastResortGuesses); // quiet upgrade pass for whatever's left \u2014 see its own comment for why this happens after render, not before
         });
         setTimeout(autoDiscoverFromResults, 400); // quiet background check, never blocks the UI
