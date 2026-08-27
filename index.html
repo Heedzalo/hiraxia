@@ -3200,7 +3200,17 @@
   // silently skipping exactly the jobs that most need a real one found.
   // Now includes both: no email, or an email that's only ever a guess.
   function runAiResearch(jobs, searchId){
-    var stillNeedEmail = jobs.filter(function(j){ return !j.email || j.emailPredicted; }).slice(0, 20); // matches the backend's own default per-search cap; sending more than it would ever process is pointless
+    // Real gap found via user report: this took the first 20 qualifying
+    // jobs in whatever order they happened to be in — including "different
+    // field" fillers (isStretch), spending real research budget on jobs
+    // the user didn't actually search for before ever reaching the ones
+    // they did. Relevant jobs now always go first; off-field fillers only
+    // fill remaining slots if genuinely relevant candidates don't use the
+    // full budget.
+    var candidates = jobs.filter(function(j){ return !j.email || j.emailPredicted; });
+    var relevant = candidates.filter(function(j){ return !j.isStretch; });
+    var offField = candidates.filter(function(j){ return j.isStretch; });
+    var stillNeedEmail = relevant.concat(offField).slice(0, 20); // matches the backend's own default per-search cap; sending more than it would ever process is pointless
     if(!stillNeedEmail.length){
       appendDiagLine('AI research: skipped — every job already had a confirmed email'); // real gap: this silently returned with zero trace before, indistinguishable from the feature never running at all
       return Promise.resolve();
@@ -4227,6 +4237,27 @@
       });
     });
   }
+  // Real ask: AI actively DISCOVERING new job postings, not just
+  // enriching ones already found — a genuinely separate capability from
+  // everything else in this file, gated behind its own kill switch
+  // (AI_DISCOVERY_ENABLED) since it has a different cost profile than
+  // email enrichment. Returns instantly at zero cost when the backend
+  // flag is off, same graceful-disable pattern as every other AI route.
+  function sourceAiDiscoveredJobs(q, location){
+    var base = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
+    return fetchWithTimeout(base+'/ai-discover-jobs', {
+      method:'POST', headers: backendHeaders({'Content-Type':'application/json'}),
+      body: JSON.stringify({ query: q||'', location: location||'', searchId: 'search_'+Date.now() })
+    }, 90000) // real multi-round AI search, needs real buffer like the other AI routes
+      .then(function(r){ return r.ok ? r.json() : {enabled:false, jobs:[]}; })
+      .then(function(d){
+        if(!d.enabled) return [];
+        return (d.jobs||[]).map(function(j){
+          return { title:j.title||'', company:j.company||'', loc:j.location||location||'', url:j.url||'', desc:j.snippet||'', date:'', src:'AI-Discovery' };
+        });
+      })
+      .catch(function(){ return []; });
+  }
   function sourceJobsPipe(q, countryIso){
     var base = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
     return fetchWithTimeout(base+'/jobspipe-jobs', {
@@ -4817,7 +4848,8 @@
       {n:'RemoteJobs.org', p:new Promise(function(res){ setTimeout(function(){ res(sourceRemoteJobsOrg(q)); }, 600); }).then(function(p){ return p; })},
       {n:'JobsPipe', p:new Promise(function(res){ setTimeout(function(){ res(sourceJobsPipe(q, (c.v==='sa2'?'sa':(c.v==='remote'?'':c.v)))); }, 900); }).then(function(p){ return p; })},
       (c.v==='lb' ? {n:'HireLebanese', p:new Promise(function(res){ setTimeout(function(){ res(sourceHireLebanese(q)); }, 1200); }).then(function(p){ return p; })} : null),
-      {n:'WebSearch', p:new Promise(function(res){ setTimeout(function(){ res(sourceWebSearchJobs(q, curCity() || c.gj || '')); }, 1500); }).then(function(p){ return p; })}
+      {n:'WebSearch', p:new Promise(function(res){ setTimeout(function(){ res(sourceWebSearchJobs(q, curCity() || c.gj || '')); }, 1500); }).then(function(p){ return p; })},
+      {n:'AI-Discovery', p:new Promise(function(res){ setTimeout(function(){ res(sourceAiDiscoveredJobs(q, curCity() || c.gj || '')); }, 1800); }).then(function(p){ return p; })}
     ];
     // Bounded query-expansion pass — see getSynonymForQuery's own comment.
     // Only the two highest-volume sources, only when a real match is found,
