@@ -2041,6 +2041,7 @@
             (window.__googleJobsEmptyDebug && window.__googleJobsEmptyDebug.length ? ' \u00b7 GoogleJobs empty responses: '+window.__googleJobsEmptyDebug.join(' | ') : '')+
             (window.__jobsPipeEmptyDebug ? ' \u00b7 '+window.__jobsPipeEmptyDebug : '')+
             (window.__hireLebaneseDiag ? ' \u00b7 HireLebanese diag: '+JSON.stringify(window.__hireLebaneseDiag) : '')+
+            (window.__webSearchDiag && window.__webSearchDiag.length ? ' \u00b7 WebSearch diag: '+window.__webSearchDiag.join(' | ') : '')+
             ' \u00b7 Domain search: Serper key '+(d.serperConfigured?'configured':'NOT configured on Render')+
             ', Brave key '+(d.braveConfigured?'configured':'NOT configured on Render')+
             ', Tavily key '+(d.tavilyConfigured?'configured':'NOT configured on Render')+
@@ -3946,6 +3947,16 @@
         .then(function(r){ return r.ok ? r.json() : {jobs:[]}; })
         .then(function(d){
           var jobs = d.jobs || [];
+          // Real gap found via user report: this source had NO diagnostic
+          // surfacing at all, unlike every other source \u2014 meaning every
+          // "WebSearch (0)" gave zero visibility into whether that was a
+          // genuine empty search or a broken request. Same pattern already
+          // proven on HireLebanese: only surfaces when there's nothing to
+          // show, so a working search stays clean.
+          if(!jobs.length && d.websearchDiag){
+            window.__webSearchDiag = window.__webSearchDiag || [];
+            window.__webSearchDiag.push((tierLabel||'country')+': '+JSON.stringify(d.websearchDiag));
+          }
           // Real gap found via user report (asking whether country-priority
           // scoring applies here): the backend was tagging EVERY result with
           // the same generic search-location string, regardless of what that
@@ -4533,6 +4544,7 @@
     window.__googleJobsEmptyDebug = null;
     window.__jobsPipeEmptyDebug = null;
     window.__hireLebaneseDiag = null;
+    window.__webSearchDiag = null;
     window.__hlCountTrace = null;
     window.__hlEarlyTrace = null;
     window.__hlLastResortTrace = null;
