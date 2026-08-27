@@ -4071,18 +4071,23 @@
           // own text \u2014 otherwise leaves the honest generic fallback in place.
           jobs.forEach(function(j){
             var hay = (j.title+' '+j.desc).toLowerCase();
-            // Real bug found via user report: "Lebanon" matched a job
-            // genuinely titled "...in Lebanon, Pennsylvania" \u2014 several US
-            // towns share a name with a country Hiraxia searches (Lebanon
-            // PA/OH/TN/etc., Jordan MN, Georgia the US state itself). A
-            // nearby US-state name/abbreviation is a strong signal this is
-            // the US town, not the country, so skip the match rather than
-            // mislabel it.
-            var US_STATE_COLLISION = /\b(pennsylvania|ohio|tennessee|virginia|missouri|indiana|oregon|kentucky|new hampshire|illinois|kansas)\b/i;
+            // Real bug found via user report: "Lebanon" matched jobs
+            // genuinely in Lebanon, PA / Lebanon, IN / Lebanon County \u2014
+            // several US towns share a name with a country Hiraxia
+            // searches. Combines both signals for real coverage: full state
+            // names spelled out ("Lebanon, Pennsylvania") AND the US postal
+            // address format (a comma directly followed by a capitalized
+            // 2-letter code, "Lebanon, PA") \u2014 a bare word-boundary check on
+            // abbreviations ALONE can't safely run without colliding with
+            // ordinary words ("in", "or"), but requiring the comma-prefix
+            // address format makes it safe. Plus "County" (Lebanon the
+            // country has no counties) and .gov domains (never a real
+            // private-sector employer).
+            var US_LOCATION_SIGNAL = /\b(pennsylvania|ohio|tennessee|virginia|missouri|indiana|oregon|kentucky|new hampshire|illinois|kansas)\b|,\s*[A-Z]{2}\b|\bcounty\b/i;
             for(var i=1;i<countries.length;i++){ // skip index 0 (remote/worldwide \u2014 not a real match signal)
               var country = countries[i];
               var hit = country.keys.some(function(k){ return hay.indexOf(k)>-1; });
-              if(hit && country.v==='lb' && US_STATE_COLLISION.test(hay)) continue; // likely the US town, not the country \u2014 keep looking rather than mislabel
+              if(hit && country.v==='lb' && (US_LOCATION_SIGNAL.test(j.title+' '+j.desc) || /\.gov(\/|$)/i.test(j.url||''))) continue; // likely the US town/county, not the country \u2014 keep looking rather than mislabel
               if(hit){ j.loc = country.label.replace(/^[^ ]+ /,''); break; }
             }
             if(tierLabel) j.src = 'WebSearch\u00b7' + tierLabel; // visible on the card itself which tier actually found it
