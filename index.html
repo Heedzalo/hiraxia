@@ -4248,15 +4248,21 @@
     return fetchWithTimeout(base+'/ai-discover-jobs', {
       method:'POST', headers: backendHeaders({'Content-Type':'application/json'}),
       body: JSON.stringify({ query: q||'', location: location||'', searchId: 'search_'+Date.now() })
-    }, 90000) // real multi-round AI search, needs real buffer like the other AI routes
+    }, 200000) // raised from 90s — the search/fetch budget behind this call was raised significantly (4\u219210 searches, 6\u219215 fetches), needs real buffer to match
       .then(function(r){ return r.ok ? r.json() : {enabled:false, jobs:[]}; })
       .then(function(d){
-        if(!d.enabled) return [];
+        if(!d.enabled){ appendDiagLine('AI-Discovery: disabled (AI_DISCOVERY_ENABLED not set)'); return []; }
+        if(!d.jobs || !d.jobs.length){ appendDiagLine('AI-Discovery: ran, found 0 jobs this search'); return []; }
+        appendDiagLine('AI-Discovery: found '+d.jobs.length+' job(s)');
         return (d.jobs||[]).map(function(j){
           return { title:j.title||'', company:j.company||'', loc:j.location||location||'', url:j.url||'', desc:j.snippet||'', date:'', src:'AI-Discovery' };
         });
       })
-      .catch(function(){ return []; });
+      // Real bug found via user report, same category already fixed once
+      // for AI research: a silent catch here made "genuinely found
+      // nothing" and "the request actually failed" look identical — with
+      // no way to tell which happened. Now surfaces the real reason.
+      .catch(function(e){ appendDiagLine('AI-Discovery: request failed — '+String(e.message||e).slice(0,150)); return []; });
   }
   function sourceJobsPipe(q, countryIso){
     var base = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
