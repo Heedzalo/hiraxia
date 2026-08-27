@@ -5044,7 +5044,7 @@
         allJobs = mergeWithPreviousResults(list, q); // merged with prior results — but only when re-searching roughly the same thing; see mergeWithPreviousResults for why
         var hlAfterMerge = allJobs.filter(function(j){ return j.src && j.src.indexOf('HireLebanese')===0; }).length;
         allJobs.forEach(function(j){ j.score = scoreJob(j); j.days = j.date ? daysAgo(j.date) : null; }); // re-score AND re-freshness-check every job in the merged pool, not just this batch — a carried-over job needs its "Xd ago" label to reflect real elapsed time, not whatever it was when first found
-        allJobs = capWithSourceGuarantee(allJobs, 100, [{src:'HireLebanese', min:30}, {src:'WebSearch', min:30}]); // top 100 overall, but HireLebanese and WebSearch each get a protected minimum — see this function's own comment for why
+        allJobs = capWithSourceGuarantee(allJobs, 100, [{src:'HireLebanese', min:30}, {src:'WebSearch', min:30}, {src:'AI-Discovery', min:40}]); // top 100 overall — AI-Discovery gets the largest protected minimum per explicit request, HireLebanese/WebSearch still protected too
         var hlAfterCap = allJobs.filter(function(j){ return j.src && j.src.indexOf('HireLebanese')===0; }).length;
         window.__hlCountTrace = 'HireLebanese count trace: before-merge='+hlBeforeMerge+', after-dedup='+hlAfterMerge+', after-guarantee='+hlAfterCap;
         console.log(window.__hlCountTrace);
@@ -6492,7 +6492,7 @@
         extra = extra.filter(function(j){ return !j.date || daysAgo(j.date) <= 20; });
         var merged = dedupeJobs(allJobs.concat(extra));
         merged.forEach(function(j){ j.score = scoreJob(j); j.days = j.date ? daysAgo(j.date) : null; });
-        allJobs = markAppliedJobs(capWithSourceGuarantee(merged, 100, [{src:'HireLebanese', min:30}, {src:'WebSearch', min:30}])); // same cap + guarantees as the main search path
+        allJobs = markAppliedJobs(capWithSourceGuarantee(merged, 100, [{src:'HireLebanese', min:30}, {src:'WebSearch', min:30}, {src:'AI-Discovery', min:40}])); // same cap + guarantees as the main search path
         // Real bug found via user report, now fixed structurally: renderJobs()
         // no longer wipes previously-added diagnostic lines (see its own
         // comment) — appendDiagLine() below survives this renderJobs(0,[])
