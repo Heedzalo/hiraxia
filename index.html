@@ -2048,6 +2048,14 @@
             (d.via ? ' \u2014 last successful lookup used '+d.via : '');
           console.log(window.__domainSearchInfo);
         }
+        // Real ask: track actual Serper query cost against real outcomes,
+        // not just "it worked or it didn't" \u2014 lets us actually see whether
+        // the enrichment pipeline is finding more for a reasonable cost, or
+        // just spending more for the same results.
+        window.__enrichStats = window.__enrichStats || { companiesEnriched:0, serperQueries:0, domainsFound:0 };
+        window.__enrichStats.companiesEnriched++;
+        window.__enrichStats.serperQueries += (d && typeof d.serperQueriesUsed==='number') ? d.serperQueriesUsed : 0;
+        if(d && d.domain) window.__enrichStats.domainsFound++;
         return (d && d.domain) ? d.domain : null;
       })
       .catch(function(){ return null; });
@@ -3132,6 +3140,53 @@
       if(renderJobs.lastOk !== undefined) renderJobs(renderJobs.lastOk, renderJobs.lastSrcNames);
     });
   }
+  // Real ask: WebSearch results need a genuinely high real-email rate, not
+  // just "found something." A WebSearch result's OWN page is often just a
+  // job listing (Serper indexed it, not necessarily the employer's real
+  // site) \u2014 the real published email is frequently on the company's
+  // SEPARATE careers/contact page instead. This gives WebSearch results the
+  // same multi-layered treatment other sources already get through
+  // findCompanyThenEmail: job's own page first, then a real company-domain
+  // search (now multi-query, see /find-domain), then a real crawl of that
+  // company's actual site \u2014 reusing /scan-website-email, not duplicating it.
+  function deepEnrichWebSearchJobs(jobs){
+    var stillNeedEmail = jobs.filter(function(j){ return j.src && j.src.indexOf('WebSearch')===0 && !j.email; });
+    if(!stillNeedEmail.length) return Promise.resolve();
+    var base = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
+    return runWithConcurrency(stillNeedEmail, 3, function(j){
+      var companyName = j.company || j.title;
+      if(!companyName) return Promise.resolve();
+      return findRealDomainViaBackend(companyName, j.loc).then(function(domain){
+        if(!domain) return;
+        return fetchWithTimeout(base+'/scan-website-email', {
+          method:'POST', headers: backendHeaders({'Content-Type':'application/json'}),
+          body: JSON.stringify({ domain: domain })
+        }, 12000)
+          .then(function(r){ return r.ok ? r.json() : {email:''}; })
+          .then(function(d){
+            if(d && d.email){
+              j.email = d.email;
+              j.emailPredicted = false;
+              j.emailVerified = true; // a real email actually found on the company's own real site, not a pattern-check guess
+              j.src = (j.src||'') + ' (email via company site: '+(d.foundOn||'?')+')';
+            }
+          });
+      }).catch(function(){});
+    }).then(function(){
+      // Real, visible metric per explicit quality target (at least 50% of
+      // WebSearch results should have a genuinely verified email, not a
+      // guess) \u2014 computed directly from the actual job objects at this
+      // point, not assumed. Shows the real number either way.
+      var allWebSearch = jobs.filter(function(j){ return j.src && j.src.indexOf('WebSearch')===0; });
+      var realEmails = allWebSearch.filter(function(j){ return j.email && !j.emailPredicted; });
+      var pct = allWebSearch.length ? Math.round(100*realEmails.length/allWebSearch.length) : 0;
+      window.__webSearchEmailRateDebug = 'WebSearch email quality: '+realEmails.length+'/'+allWebSearch.length+' ('+pct+'%) have a real (non-predicted) email';
+      console.log(window.__webSearchEmailRateDebug);
+      var slw = document.getElementById('srcLine');
+      if(slw) slw.textContent = (slw.textContent ? slw.textContent+' \u00b7 ' : '') + window.__webSearchEmailRateDebug;
+      if(renderJobs.lastOk !== undefined) renderJobs(renderJobs.lastOk, renderJobs.lastSrcNames);
+    });
+  }
   function backgroundPageScanHireLebanese(guessedJobs){ return backgroundPageScanBySource(guessedJobs, 'HireLebanese'); }
   function backgroundVerifyLastResortGuesses(guessedJobs){
     if(!guessedJobs.length) return;
@@ -3320,8 +3375,44 @@
     // since Gamalogic's own rate limits for the verification step aren't
     // confirmed.
     return runWithConcurrency(candidates, 6, scanOne).then(function(){
+      // Real gap found via user report: domain/email discovery only ever
+      // ran for ONE representative job per company (the dedup above exists
+      // specifically to avoid re-searching the same company many times),
+      // but the email it found was never propagated back to the OTHER jobs
+      // from that same company that got filtered out of the search
+      // candidates entirely \u2014 they stayed emailless even after a real
+      // email was found for their own employer. This is the actual "search
+      // once per unique employer, reuse across every job from them" step:
+      // free, no new searches, just applying what scanOne already paid for.
+      var byCompany = {};
+      candidates.forEach(function(c){
+        var key = (c.company||'').toLowerCase().trim();
+        if(key && c.email) byCompany[key] = c;
+      });
+      var propagated = 0;
+      jobs.forEach(function(j){
+        if(j.email) return; // already has its own email, nothing to do
+        var key = (j.company||'').toLowerCase().trim();
+        if(!key || !byCompany[key]) return;
+        var source = byCompany[key];
+        j.email = source.email;
+        j.emailPredicted = source.emailPredicted;
+        j.emailVerified = source.emailVerified;
+        j.src = (j.src||'') + ' (email via same-employer match)';
+        propagated++;
+      });
+      // Real ask: cost-efficiency reporting \u2014 real Serper spend against real
+      // outcomes, computed from the running totals tracked in
+      // findRealDomainViaBackend across every call made during this search.
+      var stats = window.__enrichStats || { companiesEnriched:0, serperQueries:0, domainsFound:0 };
+      var efficiency = stats.serperQueries>0 ? (found/stats.serperQueries).toFixed(2) : 'n/a';
+      window.__enrichCostDebug = 'Enrichment cost: '+stats.companiesEnriched+' companies enriched, '+
+        stats.serperQueries+' Serper queries used, '+stats.domainsFound+' domains found, '+
+        found+' emails found, '+efficiency+' emails per Serper query';
       window.__pageScanDebug = (window.__domainSearchInfo ? window.__domainSearchInfo+' \u00b7 ' : '')+
         'Page-scan: tried '+candidates.length+', found '+found+
+        (propagated ? ' \u00b7 reused across '+propagated+' more job(s) from the same employers' : '')+
+        ' \u00b7 '+window.__enrichCostDebug+
         (errors.length ? ' \u2014 '+errors.join(' \u00b7 ') : '');
       console.log(window.__pageScanDebug);
       return jobs;
@@ -3666,14 +3757,25 @@
   // automatic fallback for the exact domains where Hunter misses or is
   // rate-limited, so the two free tiers stack instead of overlapping.
   window.__prospeoDebug = '';
+  // Real bug found via user report: this was a stub returning null,
+  // gated behind a dead localStorage key (hiraxia_prospeoKey) that could
+  // only ever have been set through a settings-panel field removed
+  // entirely much earlier \u2014 the exact same dead-end pattern already found
+  // and fixed for Gamalogic. The backend's own /prospeo-finder route was
+  // already correctly rebuilt for Prospeo's real two-step API (confirmed
+  // directly from its code), it just never had a real caller. Now uses
+  // the same shared-server-side-key pattern as every other shared key in
+  // the app \u2014 nothing for a real user to ever configure.
   function findEmailViaProspeo(domain){
-    // Disabled after two failed attempts to match Prospeo's new two-step API
-    // format (search-person -> enrich-person) exactly - their docs alone
-    // weren't enough to get the filter syntax right, and direct testing via
-    // Hoppscotch hit tool friction rather than a clean result. Was always a
-    // third-priority fallback behind Hunter and RapidAPI-finder, both of
-    // which still work fine. Key stays saved for an easy re-enable later.
-    return Promise.resolve(null);
+    if(!domain) return Promise.resolve(null);
+    var base = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
+    return fetchWithTimeout(base+'/prospeo-finder', {
+      method:'POST', headers: backendHeaders({'Content-Type':'application/json'}),
+      body: JSON.stringify({ domain: domain })
+    }, 15000)
+      .then(function(r){ return r.ok ? r.json() : {email:''}; })
+      .then(function(d){ return (d && d.email) || null; })
+      .catch(function(){ return null; });
   }
 
   function enrichWithHunterEmail(jobs){
@@ -3751,10 +3853,9 @@
           var hunterReason = 'disabled (free tier exhausted)';
           var hunterPromise = Promise.resolve(null);
 
-          var prospeoReason = 'disabled (new API integration unverified)';
-          var prospeoPromise = !lsGet('hiraxia_prospeoKey') ? Promise.resolve(null)
-            : findEmailViaProspeo(r.domain).then(function(email){
-                if(!email) prospeoReason = 'no email either';
+          var prospeoReason = '';
+          var prospeoPromise = findEmailViaProspeo(r.domain).then(function(email){
+                if(!email) prospeoReason = 'no HR/recruiting contact found at this domain';
                 return email || null;
               }).catch(function(e2){ prospeoReason = String(e2.message||e2).slice(0,200); return null; });
 
@@ -3970,9 +4071,18 @@
           // own text \u2014 otherwise leaves the honest generic fallback in place.
           jobs.forEach(function(j){
             var hay = (j.title+' '+j.desc).toLowerCase();
+            // Real bug found via user report: "Lebanon" matched a job
+            // genuinely titled "...in Lebanon, Pennsylvania" \u2014 several US
+            // towns share a name with a country Hiraxia searches (Lebanon
+            // PA/OH/TN/etc., Jordan MN, Georgia the US state itself). A
+            // nearby US-state name/abbreviation is a strong signal this is
+            // the US town, not the country, so skip the match rather than
+            // mislabel it.
+            var US_STATE_COLLISION = /\b(pennsylvania|ohio|tennessee|virginia|missouri|indiana|oregon|kentucky|new hampshire|illinois|kansas)\b/i;
             for(var i=1;i<countries.length;i++){ // skip index 0 (remote/worldwide \u2014 not a real match signal)
               var country = countries[i];
               var hit = country.keys.some(function(k){ return hay.indexOf(k)>-1; });
+              if(hit && country.v==='lb' && US_STATE_COLLISION.test(hay)) continue; // likely the US town, not the country \u2014 keep looking rather than mislabel
               if(hit){ j.loc = country.label.replace(/^[^ ]+ /,''); break; }
             }
             if(tierLabel) j.src = 'WebSearch\u00b7' + tierLabel; // visible on the card itself which tier actually found it
@@ -4821,6 +4931,11 @@
           backgroundPageScanBySource(hlStillNeedsRealScan, 'HireLebanese'),
           backgroundPageScanBySource(wsStillNeedsRealScan, 'WebSearch')
         ]).then(function(){
+          // Second layer specifically for WebSearch, per explicit quality
+          // target: only fires for whatever still has no email after the
+          // job's-own-page scan above \u2014 tries the company's real domain +
+          // real site next, rather than settling for a weak guess.
+          deepEnrichWebSearchJobs(allJobs);
           backgroundVerifyLastResortGuesses(lastResortGuesses); // quiet upgrade pass for whatever's left \u2014 see its own comment for why this happens after render, not before
         });
         setTimeout(autoDiscoverFromResults, 400); // quiet background check, never blocks the UI
