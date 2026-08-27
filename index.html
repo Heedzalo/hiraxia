@@ -3182,8 +3182,7 @@
       var pct = allWebSearch.length ? Math.round(100*realEmails.length/allWebSearch.length) : 0;
       window.__webSearchEmailRateDebug = 'WebSearch email quality: '+realEmails.length+'/'+allWebSearch.length+' ('+pct+'%) have a real (non-predicted) email';
       console.log(window.__webSearchEmailRateDebug);
-      var slw = document.getElementById('srcLine');
-      if(slw) slw.textContent = (slw.textContent ? slw.textContent+' \u00b7 ' : '') + window.__webSearchEmailRateDebug;
+      appendDiagLine(window.__webSearchEmailRateDebug);
       if(renderJobs.lastOk !== undefined) renderJobs(renderJobs.lastOk, renderJobs.lastSrcNames);
     });
   }
@@ -3218,23 +3217,29 @@
         window.__aiResearchDebug = 'AI research: mode='+d.mode+', researched '+d.researched+', found '+found.length+' real email(s)'+
           (d.mode==='shadow' ? ' (SHADOW MODE — logged only, not applied to results below)' : '');
         console.log(window.__aiResearchDebug, d.results);
-        var sl = document.getElementById('srcLine');
-        if(sl) sl.textContent = (sl.textContent ? sl.textContent+' \u00b7 ' : '') + window.__aiResearchDebug;
 
-        if(d.mode !== 'active') return; // shadow mode: stop here, never touch the actual job objects
+        if(d.mode === 'active'){
+          // Real bug found via user report: renderJobs() fully OVERWRITES
+          // srcLine's text (not appends) — appending the diagnostic line
+          // BEFORE calling renderJobs() here meant it got immediately
+          // wiped out the moment the refreshed results rendered, every
+          // single time, in exactly this (active) mode. Now uses the
+          // shared appendDiagLine() helper (see renderJobs' own comment)
+          // which survives this and every other renderJobs() call.
+          var byUrl = {};
+          d.results.forEach(function(r){ if(r.email && r.jobUrl) byUrl[r.jobUrl] = r; });
+          jobs.forEach(function(j){
+            var match = j.url && byUrl[j.url];
+            if(!match) return;
+            j.email = match.email;
+            j.emailPredicted = false;
+            j.emailVerified = match.confidence === 'high';
+            j.src = (j.src||'') + ' (email via AI research: '+(match.sourceType||'?')+')';
+          });
+          if(renderJobs.lastOk !== undefined) renderJobs(renderJobs.lastOk, renderJobs.lastSrcNames);
+        }
 
-        // Active mode only: apply each result back to its matching job by URL.
-        var byUrl = {};
-        d.results.forEach(function(r){ if(r.email && r.jobUrl) byUrl[r.jobUrl] = r; });
-        jobs.forEach(function(j){
-          var match = j.url && byUrl[j.url];
-          if(!match) return;
-          j.email = match.email;
-          j.emailPredicted = false;
-          j.emailVerified = match.confidence === 'high';
-          j.src = (j.src||'') + ' (email via AI research: '+(match.sourceType||'?')+')';
-        });
-        if(renderJobs.lastOk !== undefined) renderJobs(renderJobs.lastOk, renderJobs.lastSrcNames);
+        appendDiagLine(window.__aiResearchDebug);
       })
       .catch(function(e){ window.__aiResearchDebug = 'AI research: request failed — '+String(e.message||e).slice(0,150); console.log(window.__aiResearchDebug); });
   }
@@ -3287,8 +3292,7 @@
     ];
     window.__productionDiagReport = lines.join('\n');
     console.log(window.__productionDiagReport);
-    var sl = document.getElementById('srcLine');
-    if(sl) sl.textContent = (sl.textContent ? sl.textContent+' \u00b7 ' : '') + 'Full production diagnostic logged to console (window.__productionDiagReport)';
+    appendDiagLine('Full production diagnostic logged to console (window.__productionDiagReport)');
   }
   function backgroundVerifyLastResortGuesses(guessedJobs){
     if(!guessedJobs.length) return;
@@ -4762,6 +4766,7 @@
     window.__jobsPipeEmptyDebug = null;
     window.__hireLebaneseDiag = null;
     window.__webSearchDiag = null;
+    window.__extraDiagLines = []; // reset per search — otherwise a new search's diagnostic line would start with every line accumulated from the previous one still attached
     window.__hlCountTrace = null;
     window.__hlEarlyTrace = null;
     window.__hlLastResortTrace = null;
@@ -5057,12 +5062,10 @@
         });
         setTimeout(autoDiscoverFromResults, 400); // quiet background check, never blocks the UI
         if(fails.length){
-          var sl = document.getElementById('srcLine');
-          sl.textContent = (sl.textContent ? sl.textContent+' \u00b7 ' : '') + fails.join(' \u00b7 ');
+          appendDiagLine(fails.join(' \u00b7 '));
         }
         if(window.__backendExtractDebug){
-          var sl0 = document.getElementById('srcLine');
-          sl0.textContent = (sl0.textContent ? sl0.textContent+' \u00b7 ' : '') + window.__backendExtractDebug;
+          appendDiagLine(window.__backendExtractDebug);
         }
         if(window.__hunterDebug){
           var sl2 = document.getElementById('srcLine');
@@ -5324,10 +5327,32 @@
     }).catch(function(){ _discoveryRunning = false; });
   }
 
+  // Real, structural fix for a real bug found via user report: renderJobs()
+  // was DIRECTLY OVERWRITING srcLine's full text on every call, while
+  // several independent background tasks (WebSearch page-scan, AI
+  // research, city-level deep scan, last-resort verification) each
+  // separately APPEND their own diagnostic line to that same text AND
+  // separately call renderJobs() themselves once done — so whichever of
+  // those finished LAST would silently erase every diagnostic line any
+  // earlier one had added, including its own, the moment its own
+  // renderJobs() call ran. This was a genuine race, not just an ordering
+  // issue — reordering one call site couldn't fix it since the others
+  // could still race in afterward. The real fix: diagnostic lines are
+  // never written directly to srcLine again: they're accumulated in
+  // window.__extraDiagLines, and BOTH renderJobs() and appendDiagLine()
+  // always rebuild the full text from the stored base + all accumulated
+  // extras, so nothing already added can ever be lost by a later call.
+  function appendDiagLine(text){
+    window.__extraDiagLines = window.__extraDiagLines || [];
+    window.__extraDiagLines.push(text);
+    var sl = document.getElementById('srcLine');
+    if(sl) sl.textContent = (window.__srcLineBase||'') + (window.__extraDiagLines.length ? ' \u00b7 '+window.__extraDiagLines.join(' \u00b7 ') : '');
+  }
   function renderJobs(okSources, srcNames){
     renderJobs.lastOk = okSources; renderJobs.lastSrcNames = srcNames;
     var list = document.getElementById('matchList');
-    document.getElementById('srcLine').textContent = okSources ? t('srcLineLiveFrom',{sources:srcNames.join(', ')}) : '';
+    window.__srcLineBase = okSources ? t('srcLineLiveFrom',{sources:srcNames.join(', ')}) : '';
+    document.getElementById('srcLine').textContent = window.__srcLineBase + (window.__extraDiagLines && window.__extraDiagLines.length ? ' \u00b7 '+window.__extraDiagLines.join(' \u00b7 ') : '');
     var copyBtn = document.getElementById('copyDiagBtn');
     if(copyBtn){
       copyBtn.style.display = okSources ? 'inline-block' : 'none';
@@ -6421,14 +6446,12 @@
         var merged = dedupeJobs(allJobs.concat(extra));
         merged.forEach(function(j){ j.score = scoreJob(j); j.days = j.date ? daysAgo(j.date) : null; });
         allJobs = markAppliedJobs(capWithSourceGuarantee(merged, 100, [{src:'HireLebanese', min:30}, {src:'WebSearch', min:30}])); // same cap + guarantees as the main search path
-        // Real bug found via user report: renderJobs(0,[]) below sets
-        // srcLine to an EMPTY string (okSources=0 is falsy), wiping out
-        // everything the main search already built there right before the
-        // deep-scan append happens - silently defeating the earlier append
-        // fix. Saving and restoring the existing content across this call.
-        var preservedSrcLine = (document.getElementById('srcLine') || {}).textContent || '';
+        // Real bug found via user report, now fixed structurally: renderJobs()
+        // no longer wipes previously-added diagnostic lines (see its own
+        // comment) — appendDiagLine() below survives this renderJobs(0,[])
+        // call automatically, no manual save/restore needed anymore.
         renderJobs(0, []);
-        var sl = document.getElementById('srcLine'); if(sl) sl.textContent = (preservedSrcLine ? preservedSrcLine+' \u00b7 ' : '') + 'deep scan merged: '+extra.length+' city-level results added — '+cityReport.join(' \u00b7 ');
+        appendDiagLine('deep scan merged: '+extra.length+' city-level results added — '+cityReport.join(' \u00b7 '));
         if(window.__hiraxiaExcite) window.__hiraxiaExcite(0.3);
         setThinking('Deep scan complete — '+allJobs.length+' openings total.', 100);
         addMsg('Deep scan complete — <b>'+extra.length+'</b> additional '+(extra.length===1?'signal':'signals')+' merged into the field.','bot');
