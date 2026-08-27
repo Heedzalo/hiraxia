@@ -3212,7 +3212,7 @@
     return fetchWithTimeout(base+'/ai-research', {
       method:'POST', headers: backendHeaders({'Content-Type':'application/json'}),
       body: JSON.stringify({ jobs: payload, searchId: searchId || ('search_'+Date.now()) })
-    }, 120000) // real multi-round AI research can genuinely take a while, unlike every other fast lookup in this file
+    }, 240000) // raised from 120s alongside the job-cap increase (5\u219220) — 2 waves of real multi-round research needs real buffer; still just a client-side cap, doesn't control any platform-level timeout on Render's side
       .then(function(r){ return r.ok ? r.json() : {enabled:false, results:[]}; })
       .then(function(d){
         if(!d.enabled){ window.__aiResearchDebug = 'AI research: disabled (OPENAI_RESEARCH_ENABLED not set)'; return; }
@@ -4081,6 +4081,14 @@
     // this is the concrete "basics for launch" answer to platform-signup friction: when two
     // jobs are comparably relevant, the one that needs NO third-party account surfaces first.
     if(job.email && !job.isStretch) s += 3;
+    // Real ask: AI-research-found emails should always rank above other
+    // email types, not just tie with them. A strong boost specifically
+    // for this source — larger than any other single factor here except
+    // an exact in-country location match — so these consistently surface
+    // near the top of results and within the email-apply filter
+    // specifically, while isStretch (off-field fillers) still correctly
+    // caps genuinely irrelevant jobs regardless of email source.
+    if(job.src && job.src.indexOf('email via AI research') > -1 && !job.isStretch) s += 7;
     if(job.isStretch) s = Math.min(s - 14, 2); // off-field fillers: hard-capped low, never allowed to look decent
     return s;
   }
