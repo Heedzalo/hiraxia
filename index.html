@@ -3923,16 +3923,21 @@
   // exactly the same proven approach already built for HireLebanese \u2014
   // reused here, not duplicated.
   //
-  // Always searches all three tiers (country, MENA, global) on every call,
-  // not just when the first tier comes back thin \u2014 explicit decision, to
-  // make sure there's genuinely enough raw volume feeding the 30-job
-  // guarantee (capWithSourceGuarantee) downstream, rather than relying on
-  // one thin country-specific pass to happen to clear it. Real, deliberate
-  // cost tradeoff: this is 3 Serper calls per search instead of 1, same
-  // "understood, build it anyway" decision already made for running this
-  // source on every search at all.
+  // Real gap found via user report: a search fired all 3 tiers (country,
+  // MENA, global) unconditionally, every single time \u2014 even when the
+  // country-specific pass alone already found plenty. That same search
+  // also showed widespread timeouts across many UNRELATED sources
+  // (Himalayas, RemoteJobs.org, JobsPipe, HireLebanese, GoogleJobs\u00b7synonym
+  // all timing out together) \u2014 a pattern consistent with the free-tier
+  // backend being overloaded by 3x the concurrent outbound calls this
+  // source adds on every search. Reverted to conditional widening: country
+  // tier runs first, MENA only fires if that came back thin, global only
+  // fires if MENA still didn't help \u2014 cutting typical-case load back to
+  // 1 call instead of 3, while still widening properly for genuinely
+  // thin/niche searches.
   function sourceWebSearchJobs(q, location){
     var base = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
+    var THIN_THRESHOLD = 5; // fewer than this many real results counts as "came back weak" \u2014 worth widening rather than accepting as final
     function oneSearch(loc, tierLabel){
       return fetchWithTimeout(base+'/websearch-jobs', {
         method:'POST', headers: backendHeaders({'Content-Type':'application/json'}),
@@ -3964,24 +3969,15 @@
           return jobs;
         }).catch(function(){ return []; }); // one tier failing never blocks the others
     }
-    return Promise.all([
-      oneSearch(location, null),
-      oneSearch('Middle East', 'MENA'),
-      oneSearch('', 'Global')
-    ]).then(function(results){
-      // dedupe across tiers by URL \u2014 the same real job can genuinely surface
-      // in more than one tier's search (e.g. a Dubai-based multinational
-      // showing up in both the country-specific and global passes)
-      var seen = {};
-      var merged = [];
-      results.forEach(function(tierJobs){
-        tierJobs.forEach(function(j){
-          if(seen[j.url]) return;
-          seen[j.url] = true;
-          merged.push(j);
+    return oneSearch(location, null).then(function(countryResults){
+      if(countryResults.length >= THIN_THRESHOLD) return countryResults;
+      return oneSearch('Middle East', 'MENA').then(function(menaResults){
+        var combined = countryResults.concat(menaResults);
+        if(combined.length >= THIN_THRESHOLD) return combined;
+        return oneSearch('', 'Global').then(function(globalResults){
+          return combined.concat(globalResults);
         });
       });
-      return merged;
     });
   }
   function sourceJobsPipe(q, countryIso){
