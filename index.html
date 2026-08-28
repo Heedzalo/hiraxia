@@ -2547,91 +2547,146 @@
   var searchGen = 0;
 
   // role families: sibling titles that count as genuinely relevant to each other
-  var ROLE_FAMILIES = {
-    // Real bug found via user report: bare 'account' as a substring
-    // wrongly matched "Account Manager"/"Account Executive" (sales
-    // roles) — exactly the named collision risk (Accountant \u2260 Account
-    // Manager). Replaced with actual accounting-specific terms; sales
-    // titles now only live in the sales family below.
-    accounting:['accountant','accounting','bookkeep','audit','financ','tax accountant','payroll',
-      'comptroll','treasur','cpa','cfo','accounts payable','accounts receivable','ap accountant',
-      'ar accountant','staff accountant','general accountant','cost accountant','management accountant',
-      'controller','fp&a','finance officer','finance manager','financial analyst'],
-    // Real ask: audit/risk/compliance genuinely overlaps with accounting
-    // but isn't the same search intent — kept separate so "Auditor"
-    // doesn't dominate every accounting search and vice versa.
-    audit_risk:['auditor','internal audit','external audit','it audit','compliance officer',
-      'compliance analyst','risk analyst','risk manager','aml analyst','kyc analyst'],
-    sales:['sales rep','sales representative','sales executive','sales associate','sales specialist',
-      'sales manager','sales supervisor','account manager','account executive','business development',
-      'bdr','sdr','head of sales','vp sales','chief revenue officer','cro'],
-    marketing:['marketing','seo','content','social media','brand','growth','communications','pr ',
-      'digital marketing','sem specialist','product marketing'],
-    // Real bug found via testing: bare 'engineer' matched ANY title
-    // containing that word (Sales Engineer, Aircraft Engineer, Civil
-    // Engineer, etc.), not just software roles — same collision category
-    // as the earlier bare 'account' bug. Replaced with 'software
-    // engineer' explicitly; the other specific compound terms already
-    // cover real software-engineering variants without the bare word.
-    software:['developer','software engineer','programmer','software','full stack','backend','frontend','devops',
-      'qa engineer','test engineer','automation engineer','site reliability','sre','cloud engineer',
-      'platform engineer','mobile developer','ios developer','android developer','web developer','cto'],
-    design:['designer','ui designer','ux designer','ux/ui','graphic','creative director','art director',
-      'visual designer','web designer','product designer','content designer'],
-    hr:['hr ','human resources','recruit','talent acquisition','talent manager','people ops',
-      'people operations','hr business partner','hrbp','chro','hr generalist','hr specialist'],
-    // Real ask: operations and supply chain/logistics genuinely differ in
-    // search intent even though related — kept as separate families.
-    ops:['operations manager','operations coordinator','operations specialist','operations analyst',
-      'operations supervisor','business operations','operations officer','operations assistant'],
-    supply_chain:['supply chain','procurement','purchasing','logistics','warehouse','inventory',
-      'demand planner','supply planner'],
-    admin:['admin assistant','administrative','coordinator','secretary','office manager','receptionist',
-      'executive assistant','personal assistant','office administrator'],
-    data:['data analyst','data scientist','business intelligence','analytics','data engineer',
-      'analytics engineer','data architect','ml engineer','ai engineer','machine learning','ai researcher'],
-    it_security:['it support','it specialist','help desk','technical support','support engineer',
-      'systems administrator','system administrator','network engineer','network administrator',
-      'it manager','cybersecurity','security engineer','security analyst','soc analyst',
-      'information security'],
-    customer:['customer service','customer support','customer success','client success','client services',
-      'call center','contact center','help desk'],
-    // Real bug found via user report: "Project Manager" and "Product
-    // Manager" are explicitly named as a case that must NOT collide —
-    // kept as fully separate families with no shared terms.
-    project_program:['project coordinator','project manager','program manager','program coordinator',
-      'pmo analyst','pmo manager','project director','delivery manager','implementation manager'],
-    engineering:['mechanical engineer','electrical engineer','electronics engineer','civil engineer',
-      'chemical engineer','industrial engineer','process engineer','project engineer','design engineer',
-      'structural engineer','environmental engineer','maintenance engineer','controls engineer',
-      'engineering manager','architecture','architect'],
-    healthcare:['nurse','nursing','rn ','registered nurse','medical assistant','healthcare assistant',
-      'pharma','pharmacist','pharmacy technician','doctor','physician','clinical','healthcare',
-      'patient care','lab technician','laboratory technician','radiology technician','medical representative'],
-    legal:['legal assistant','legal secretary','paralegal','legal counsel','lawyer','attorney',
-      'corporate counsel','legal officer','compliance counsel','general counsel'],
-    education:['teacher','teaching assistant','instructor','lecturer','professor','tutor','trainer',
-      'training coordinator','training manager','education coordinator','curriculum','academic'],
-    hospitality:['hotel','hospitality','chef','culinary','restaurant','food service','front desk','housekeeping'],
-    construction:['construction manager','site manager','site engineer','construction supervisor',
-      'foreman','quantity surveyor','estimator'],
-    research_science:['research assistant','research associate','research scientist','scientist',
-      'laboratory scientist','r&d scientist','r&d engineer','research manager'],
-    // PRODUCT — deliberately built to share ZERO terms with PRODUCTION
-    // below. This is the exact named critical case (Product \u2260 Production)
-    // that a bare substring match would get wrong.
-    product:['product manager','product owner','product lead','head of product','product associate',
-      'vp product','chief product officer','cpo','product analyst','product management','product strategy',
-      'product marketing manager','associate product manager','director of product'],
-    production:['production manager','production supervisor','production coordinator','production planner',
-      'production engineer','manufacturing manager','manufacturing engineer','plant manager',
-      'factory manager','production assistant','production operator'],
-    aviation:['aircraft','aviation','avionics','airframe','powerplant','fuselage','airworthiness',
-      'mro technician','mro mechanic','ame','lae','b1 technician','b2 technician','b1/b2','b1 ','b2 ',
-      'line maintenance','base maintenance','heavy maintenance','landing gear',
-      'cabin maintenance','helicopter maintenance','helicopter technician','helicopter engineer',
-      'flight line','ramp mechanic','a&p mechanic','ndt technician']
+  // Hierarchical taxonomy: each family splits into CORE (the same specific
+  // role, scored highest) and ADJACENT (a related specialization within
+  // the same broad family — real, but scored lower than an exact/core
+  // match, per explicit request: "Product Designer" should relate to
+  // PRODUCT but score below an actual Product Manager/Owner/Associate).
+  var ROLE_TAXONOMY = {
+    accounting: {
+      core:['accountant','accounting','bookkeep','tax accountant','payroll','accounts payable','accounts receivable',
+        'ap accountant','ar accountant','staff accountant','general accountant','cost accountant',
+        'management accountant','accounting specialist','accounting associate'],
+      adjacent:['controller','fp&a','finance officer','finance manager','financial analyst','comptroll','treasur','cpa','cfo','audit']
+    },
+    audit_risk: {
+      core:['auditor','internal audit','external audit','it audit'],
+      adjacent:['compliance officer','compliance analyst','risk analyst','risk manager','aml analyst','kyc analyst']
+    },
+    sales: {
+      core:['sales rep','sales representative','sales executive','sales associate','sales specialist',
+        'sales manager','sales supervisor','account manager','account executive','key account manager'],
+      adjacent:['business development','bdr','sdr','head of sales','vp sales','chief revenue officer','cro','commercial manager','partnerships manager','sales engineer']
+    },
+    marketing: {
+      core:['marketing specialist','marketing coordinator','marketing manager','digital marketing manager',
+        'digital marketing specialist','brand manager','brand specialist'],
+      adjacent:['seo','sem specialist','content marketing','social media','growth','communications','pr ','performance marketing']
+    },
+    software: {
+      core:['software engineer','software developer','developer','backend engineer','frontend engineer',
+        'full stack','web developer','mobile developer','ios developer','android developer'],
+      adjacent:['devops','qa engineer','test engineer','automation engineer','site reliability','sre','cloud engineer',
+        'platform engineer','systems engineer','solutions engineer','cto','programmer']
+    },
+    design: {
+      core:['designer','graphic designer','visual designer','brand designer','ui designer','ux designer',
+        'ux/ui','digital designer','web designer','design specialist'],
+      adjacent:['product designer','interior designer','architectural designer','creative director','art director','content designer']
+    },
+    hr: {
+      core:['hr assistant','hr coordinator','hr specialist','hr generalist','hr manager','human resources manager',
+        'recruit','talent acquisition'],
+      adjacent:['people ops','people operations','hr business partner','hrbp','chro','compensation','benefits']
+    },
+    ops: {
+      core:['operations assistant','operations coordinator','operations specialist','operations manager',
+        'operations analyst','operations supervisor','business operations'],
+      adjacent:['operations director','process improvement','operations officer']
+    },
+    supply_chain: {
+      core:['supply chain specialist','supply chain analyst','supply chain manager','procurement specialist',
+        'procurement manager','purchasing','logistics coordinator','logistics manager'],
+      adjacent:['warehouse manager','inventory specialist','demand planner','supply planner']
+    },
+    customer: {
+      core:['customer support','customer support representative','customer service representative',
+        'customer success associate','customer success manager','client success manager'],
+      adjacent:['technical support','support engineer','client services','call center','contact center','help desk']
+    },
+    data: {
+      core:['data analyst','business analyst','bi analyst','data scientist'],
+      adjacent:['machine learning engineer','ml engineer','ai engineer','data engineer','analytics manager','data manager',
+        'business intelligence','analytics','data architect','ai researcher']
+    },
+    it_security: {
+      core:['it support','it specialist','help desk','technical support','systems administrator','system administrator',
+        'network administrator'],
+      adjacent:['support engineer','network engineer','it manager','cybersecurity','security engineer','security analyst',
+        'soc analyst','information security']
+    },
+    project_program: {
+      core:['project coordinator','project manager','senior project manager','program manager','program coordinator'],
+      adjacent:['pmo analyst','pmo manager','portfolio manager','implementation manager','project director','delivery manager']
+    },
+    engineering: {
+      core:['mechanical engineer','electrical engineer','electronics engineer','civil engineer','industrial engineer',
+        'chemical engineer'],
+      adjacent:['manufacturing engineer','production engineer','process engineer','quality engineer','maintenance engineer',
+        'automation engineer','field engineer','project engineer','design engineer','structural engineer',
+        'environmental engineer','controls engineer','engineering manager']
+    },
+    healthcare: {
+      core:['doctor','physician','nurse','pharmacist','medical representative','medical sales representative'],
+      adjacent:['healthcare specialist','clinical research','lab technician','radiology technician','dental assistant',
+        'nursing','rn ','registered nurse','medical assistant','healthcare assistant','pharma','pharmacy technician',
+        'clinical','healthcare','patient care','laboratory technician']
+    },
+    legal: {
+      core:['lawyer','attorney','legal counsel','legal advisor','legal assistant','paralegal'],
+      adjacent:['compliance officer','compliance analyst','risk analyst','regulatory affairs','legal secretary',
+        'corporate counsel','legal officer','compliance counsel','general counsel']
+    },
+    education: {
+      core:['teacher','instructor','trainer','lecturer','professor','teaching assistant'],
+      adjacent:['education coordinator','academic advisor','tutor','training coordinator','training manager','curriculum','academic']
+    },
+    hospitality: {
+      core:['chef','cook','restaurant manager','hotel manager','waiter','bartender'],
+      adjacent:['front desk','receptionist','hospitality manager','f&b manager','culinary','food service','housekeeping']
+    },
+    media_content: {
+      core:['content writer','copywriter','editor','content creator'],
+      adjacent:['social media specialist','video editor','videographer','photographer','producer']
+    },
+    admin: {
+      core:['administrative assistant','executive assistant','office manager','receptionist','secretary'],
+      adjacent:['office coordinator','administrative coordinator','personal assistant','office administrator']
+    },
+    construction: {
+      core:['architect','architectural designer','interior architect','construction manager','construction engineer'],
+      adjacent:['site engineer','site manager','site supervisor','project engineer','quantity surveyor','foreman','estimator','interior designer']
+    },
+    research_science: {
+      core:['research assistant','research associate','research scientist','scientist'],
+      adjacent:['laboratory scientist','r&d scientist','r&d engineer','research manager']
+    },
+    // PRODUCT — deliberately shares ZERO terms with PRODUCTION below.
+    // This is the named critical case (Product \u2260 Production) a bare
+    // substring match would get wrong.
+    product: {
+      core:['product manager','product owner','product associate','product specialist','product lead',
+        'head of product','vp product','chief product officer','cpo','associate product manager','director of product'],
+      adjacent:['product analyst','product operations','product strategy','product marketing manager']
+    },
+    production: {
+      core:['production manager','production supervisor','production coordinator','manufacturing manager',
+        'manufacturing supervisor','plant manager'],
+      adjacent:['production planner','production engineer','quality manager','factory manager','production assistant','production operator']
+    },
+    aviation: {
+      core:['aircraft technician','aircraft maintenance technician','aviation technician','aircraft mechanic',
+        'aviation mechanic','aircraft maintenance engineer','avionics technician','avionics engineer'],
+      adjacent:['aviation maintenance','ground operations','aircraft','aviation','avionics','airframe','powerplant',
+        'fuselage','airworthiness','mro technician','mro mechanic','ame','lae','b1 technician','b2 technician',
+        'line maintenance','base maintenance','heavy maintenance','ramp mechanic','a&p mechanic']
+    }
   };
+  // Backward-compatible flat view — anything elsewhere in the file still
+  // reading ROLE_FAMILIES[fam] as a plain array (there is none left after
+  // this change, but kept for safety) sees core+adjacent combined.
+  var ROLE_FAMILIES = {};
+  Object.keys(ROLE_TAXONOMY).forEach(function(fam){ ROLE_FAMILIES[fam] = ROLE_TAXONOMY[fam].core.concat(ROLE_TAXONOMY[fam].adjacent); });
   // Real ask: seniority should modify a match, not require its own
   // separate family — "Senior Accountant" should match ACCOUNTING the
   // same way "Accountant" does. Stripping these words before family
@@ -4158,65 +4213,63 @@
   function relevanceScore(job){
     // how well does this job's TITLE fit the CV + the searched role?
     var title = (job.title||'').toLowerCase();
-    var titleNorm = stripSeniority(title); // "Senior Product Manager" -> "product manager", so seniority-prefixed titles match the same family terms without needing a separate entry per level
-    var rel = 0, matchedFamily = false;
-    var matchedFamilyName = null, matchType = 'none'; // real ask (spec point 11): track WHY a job matched, not just whether it did
-    var negativeSignal = null;
-    // direct CV skill in the title
-    cvSkills.forEach(function(sk){ if(title.indexOf(sk)>-1) rel += 4; });
-    // role-family kinship: if the CV or query implies a family, reward siblings
+    var titleNorm = stripSeniority(title);
     var q = document.getElementById('jobQuery').value.trim().toLowerCase();
     var qNorm = stripSeniority(q);
-    var profileText = stripSeniority(cvSkills.join(' ')+' '+q);
-    // Real bug found via user report: "Security Engineer - Product" scored
-    // 55% relevant for a "Product Manager" search — the word-overlap
-    // fallback below matched purely on the shared word "product", even
-    // though "security engineer" already clearly, definitively belongs to
-    // a DIFFERENT family (it_security). The fallback was only ever meant
-    // for titles with no clear family at all; it was firing even when a
-    // clear, contradicting family match already existed. Fix: find the
-    // title's own best-matching family FIRST, independently of the query,
-    // so a definitive mismatch can block the weak fallback below.
-    var queryFamily = null, titleOwnFamily = null;
-    Object.keys(ROLE_FAMILIES).forEach(function(fam){
-      var terms = ROLE_FAMILIES[fam];
-      if(!queryFamily && (terms.some(function(term){ return qNorm.indexOf(term)>-1; }) || qNorm.indexOf(fam)>-1)) queryFamily = fam;
-      if(!titleOwnFamily && terms.some(function(term){ return titleNorm.indexOf(term)>-1; })) titleOwnFamily = fam;
-    });
-    Object.keys(ROLE_FAMILIES).forEach(function(fam){
-      var terms = ROLE_FAMILIES[fam];
-      var profileInFam = terms.some(function(term){ return profileText.indexOf(term)>-1; }) || profileText.indexOf(fam)>-1;
-      if(profileInFam && terms.some(function(term){ return titleNorm.indexOf(term)>-1; })){ rel += 6; matchedFamily = true; matchedFamilyName = fam; matchType = 'same family'; }
-    });
-    if(q && title.indexOf(q)>-1){ rel += 6; matchType = 'exact title'; }
-    else if(qNorm && titleNorm.indexOf(qNorm)>-1){ rel += 5; if(matchType==='none') matchType = 'normalized title'; } // seniority-normalized exact match — slightly less than a literal exact match, still strong
-    // Real ask: manually adding a role family every time a new search term
-    // exposes a gap doesn't scale — this has already happened twice
-    // (aviation, product) and there are thousands of possible job titles.
-    // General fallback: if nothing above matched at all, check whether the
-    // query and title share a genuinely DISTINCTIVE word (excluding common
-    // generic job-title modifiers that appear across many unrelated
-    // fields, like "manager" or "senior", which aren't meaningful signals
-    // on their own). Weaker signal than a curated family match, but it
-    // catches roles no one has explicitly covered yet instead of silently
-    // burying them as "different field".
-    if(rel === 0 && q){
-      if(titleOwnFamily && queryFamily && titleOwnFamily !== queryFamily){
-        // Definitive negative signal: the title clearly belongs to a
-        // DIFFERENT, specific occupation than what was searched — a
-        // shared incidental word (like "product" in "Security Engineer -
-        // Product") must not override that. Fallback does not fire here.
-        negativeSignal = 'occupation mismatch (' + titleOwnFamily + ' \u2260 ' + queryFamily + ')';
-      } else {
-        var GENERIC_TITLE_WORDS = ['manager','senior','junior','lead','associate','assistant','specialist',
-          'coordinator','officer','director','head','chief','vp','executive','representative','intern',
-          'trainee','entry','level','full','time','part','remote','staff','principal','global','regional',
-          'deputy','supervisor','and','of','for','the','a','an'];
-        var sigWords = function(text){ return text.split(/\s+/).filter(function(w){ return w.length>=3 && GENERIC_TITLE_WORDS.indexOf(w)===-1; }); };
-        var qWords = sigWords(q);
-        var titleWords = sigWords(title);
-        if(qWords.some(function(w){ return titleWords.indexOf(w)>-1; })){ rel += 3; matchType = 'word overlap'; }
-      }
+    var rel = 0, matchedFamily = false, matchedFamilyName = null, matchType = 'none', negativeSignal = null;
+
+    // direct CV skill in the title — kept as its own additive signal, same as before
+    cvSkills.forEach(function(sk){ if(title.indexOf(sk)>-1) rel += 4; });
+
+    // Real ask: build a genuine hierarchical match using ROLE_TAXONOMY's
+    // core/adjacent split, not a flat "matched the family or didn't".
+    // core = the same specific role; adjacent = a related specialization
+    // within the same broad family (e.g. "Product Designer" relates to
+    // PRODUCT but is a different functional subfamily than Product
+    // Manager/Owner/Associate — real per explicit request, scored lower).
+    function findFamilyAndTier(text){
+      var family = null, tier = null;
+      Object.keys(ROLE_TAXONOMY).forEach(function(fam){
+        if(family) return;
+        var f = ROLE_TAXONOMY[fam];
+        if(f.core.some(function(t){ return text.indexOf(t)>-1; })){ family = fam; tier = 'core'; }
+        else if(f.adjacent.some(function(t){ return text.indexOf(t)>-1; })){ family = fam; tier = 'adjacent'; }
+      });
+      return { family: family, tier: tier };
+    }
+    var queryMatch = findFamilyAndTier(qNorm);
+    var titleMatch = findFamilyAndTier(titleNorm);
+    var queryFamily = queryMatch.family, titleOwnFamily = titleMatch.family;
+
+    if(q && title.indexOf(q)>-1){ rel = 14; matchType = 'exact title'; matchedFamilyName = titleOwnFamily; }
+    else if(qNorm && titleNorm.indexOf(qNorm)>-1){ rel = 12; matchType = 'normalized title'; matchedFamilyName = titleOwnFamily; }
+    else if(queryFamily && titleOwnFamily === queryFamily){
+      if(titleMatch.tier === 'core'){ rel += 9; matchType = 'same family — core role'; }
+      else { rel += 5; matchType = 'same family — related specialization'; } // real, but deliberately scored below an exact/core match
+      matchedFamily = true; matchedFamilyName = titleOwnFamily;
+    }
+    else if(titleOwnFamily && queryFamily && titleOwnFamily !== queryFamily){
+      // Real bug found via user report: "Security Engineer - Product"
+      // scored 55% relevant for a "Product Manager" search — a shared
+      // incidental word must never override a DEFINITIVE family mismatch
+      // like this. No fallback score at all when this fires.
+      negativeSignal = 'occupation mismatch (' + titleOwnFamily + ' \u2260 ' + queryFamily + ')';
+    }
+    else if(q){
+      // Real ask: manually adding a role family every time a new search
+      // term exposes a gap doesn't scale. Weak, general fallback — only
+      // reached when NEITHER side has a clear taxonomy match at all —
+      // checks for a genuinely distinctive shared word (excluding common
+      // generic modifiers like "manager"/"senior" that mean nothing on
+      // their own), scored well below any real family match.
+      var GENERIC_TITLE_WORDS = ['manager','senior','junior','lead','associate','assistant','specialist',
+        'coordinator','officer','director','head','chief','vp','executive','representative','intern',
+        'trainee','entry','level','full','time','part','remote','staff','principal','global','regional',
+        'deputy','supervisor','and','of','for','the','a','an'];
+      var sigWords = function(text){ return text.split(/\s+/).filter(function(w){ return w.length>=3 && GENERIC_TITLE_WORDS.indexOf(w)===-1; }); };
+      var qWords = sigWords(q);
+      var titleWords = sigWords(title);
+      if(qWords.some(function(w){ return titleWords.indexOf(w)>-1; })){ rel += 3; matchType = 'word overlap (weak)'; }
     }
     return { rel:rel, matchedFamily:matchedFamily, family:matchedFamilyName||titleOwnFamily, matchType:matchType, negativeSignal:negativeSignal };
   }
