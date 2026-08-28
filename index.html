@@ -3265,6 +3265,52 @@
   // confidence) email already has something in j.email, so it was
   // silently skipping exactly the jobs that most need a real one found.
   // Now includes both: no email, or an email that's only ever a guess.
+  // Real ask: an AI fallback for titles the deterministic taxonomy (and
+  // its word-overlap fallback) genuinely can't classify — per spec
+  // section 8, cache-first, cheap model, capped hard so an unusual
+  // search can't trigger unbounded classification calls. Runs as a
+  // separate background pass (same established pattern as
+  // deepEnrichWebSearchJobs/runAiResearch) since scoreJob/relevanceScore
+  // are synchronous and can't make an async call mid-render.
+  var MAX_AI_TITLE_CLASSIFICATIONS_PER_SEARCH = 15;
+  function classifyUnknownTitles(jobs){
+    var q = document.getElementById('jobQuery').value.trim().toLowerCase();
+    if(!q) return Promise.resolve(); // no query means "isStretch" doesn't even apply — nothing to reclassify
+    // What family does the SEARCH ITSELF belong to? Only jobs whose AI-
+    // classified family matches this get promoted — classifying an unknown
+    // title alone doesn't help if it's genuinely unrelated to what was searched.
+    var queryFamily = null;
+    var qNorm = stripSeniority(q);
+    Object.keys(ROLE_FAMILIES).some(function(fam){
+      if(ROLE_FAMILIES[fam].some(function(term){ return qNorm.indexOf(term)>-1; }) || qNorm.indexOf(fam)>-1){ queryFamily = fam; return true; }
+      return false;
+    });
+    if(!queryFamily) return Promise.resolve(); // the query itself doesn't map to a known family — nothing to compare against
+
+    var unknownJobs = jobs.filter(function(j){ return j.isStretch; }).slice(0, MAX_AI_TITLE_CLASSIFICATIONS_PER_SEARCH);
+    if(!unknownJobs.length) return Promise.resolve();
+    var base = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
+    var promoted = 0;
+    return runWithConcurrency(unknownJobs, 3, function(j){
+      return fetchWithTimeout(base+'/classify-job-title', {
+        method:'POST', headers: backendHeaders({'Content-Type':'application/json'}),
+        body: JSON.stringify({ title: j.title })
+      }, 15000)
+        .then(function(r){ return r.ok ? r.json() : {family:null}; })
+        .then(function(d){
+          if(d.family && d.family === queryFamily){
+            j.isStretch = false;
+            j.relScore = 6;
+            j.aiClassified = true; // for diagnostics — this job's relevance came from AI classification, not the deterministic taxonomy
+            promoted++;
+          }
+        })
+        .catch(function(){});
+    }).then(function(){
+      if(promoted) appendDiagLine('AI title classification: '+unknownJobs.length+' unclear titles checked, '+promoted+' promoted into relevant results');
+      if(renderJobs.lastOk !== undefined) renderJobs(renderJobs.lastOk, renderJobs.lastSrcNames);
+    });
+  }
   function runAiResearch(jobs, searchId){
     // Real gap found via user report: this took the first 20 qualifying
     // jobs in whatever order they happened to be in — including "different
@@ -4108,6 +4154,7 @@
     var title = (job.title||'').toLowerCase();
     var titleNorm = stripSeniority(title); // "Senior Product Manager" -> "product manager", so seniority-prefixed titles match the same family terms without needing a separate entry per level
     var rel = 0, matchedFamily = false;
+    var matchedFamilyName = null, matchType = 'none'; // real ask (spec point 11): track WHY a job matched, not just whether it did
     // direct CV skill in the title
     cvSkills.forEach(function(sk){ if(title.indexOf(sk)>-1) rel += 4; });
     // role-family kinship: if the CV or query implies a family, reward siblings
@@ -4117,10 +4164,10 @@
     Object.keys(ROLE_FAMILIES).forEach(function(fam){
       var terms = ROLE_FAMILIES[fam];
       var profileInFam = terms.some(function(term){ return profileText.indexOf(term)>-1; }) || profileText.indexOf(fam)>-1;
-      if(profileInFam && terms.some(function(term){ return titleNorm.indexOf(term)>-1; })){ rel += 6; matchedFamily = true; }
+      if(profileInFam && terms.some(function(term){ return titleNorm.indexOf(term)>-1; })){ rel += 6; matchedFamily = true; matchedFamilyName = fam; matchType = 'same family'; }
     });
-    if(q && title.indexOf(q)>-1) rel += 6;
-    else if(qNorm && titleNorm.indexOf(qNorm)>-1) rel += 5; // seniority-normalized exact match — slightly less than a literal exact match, still strong
+    if(q && title.indexOf(q)>-1){ rel += 6; matchType = 'exact title'; }
+    else if(qNorm && titleNorm.indexOf(qNorm)>-1){ rel += 5; if(matchType==='none') matchType = 'normalized title'; } // seniority-normalized exact match — slightly less than a literal exact match, still strong
     // Real ask: manually adding a role family every time a new search term
     // exposes a gap doesn't scale — this has already happened twice
     // (aviation, product) and there are thousands of possible job titles.
@@ -4139,9 +4186,28 @@
       var sigWords = function(text){ return text.split(/\s+/).filter(function(w){ return w.length>=3 && GENERIC_TITLE_WORDS.indexOf(w)===-1; }); };
       var qWords = sigWords(q);
       var titleWords = sigWords(title);
-      if(qWords.some(function(w){ return titleWords.indexOf(w)>-1; })) rel += 3;
+      if(qWords.some(function(w){ return titleWords.indexOf(w)>-1; })){ rel += 3; matchType = 'word overlap'; }
     }
-    return { rel:rel, matchedFamily:matchedFamily };
+    return { rel:rel, matchedFamily:matchedFamily, family:matchedFamilyName, matchType:matchType };
+  }
+  // Real ask (spec point 11): a real, inspectable diagnostic showing WHY
+  // each job matched or didn't — not just the final score. Logs in the
+  // exact requested format so relevance issues can be debugged directly
+  // instead of guessed at from the outside.
+  function logRelevanceDiagnostics(jobs){
+    var q = document.getElementById('jobQuery').value.trim();
+    if(!q) return;
+    var lines = ['RELEVANCE DIAGNOSTIC for query: "'+q+'"'];
+    jobs.slice(0, 100).forEach(function(j){ // capped — this is a debug view, not meant to print thousands of lines
+      if(j.isStretch){
+        lines.push('\u2717 '+j.title+' — reason: different role family'+(j.aiClassified===false ? ' (AI-checked, no match)' : ''));
+      } else {
+        var fam = j.family ? j.family.toUpperCase() : (j.aiClassified ? 'AI-CLASSIFIED' : '(word-level match)');
+        lines.push('\u2713 '+j.title+' — family: '+fam+' — match: '+(j.matchType||'unknown')+' — score: '+(j.score!=null?j.score:j.relScore));
+      }
+    });
+    window.__relevanceDiagnostic = lines.join('\n');
+    console.log(window.__relevanceDiagnostic);
   }
   var GENERIC_SKILLS = ['english','arabic','french','excel','communication','teamwork','ms office','office'];
   function wordMatch(sk, hay){
@@ -4198,6 +4264,7 @@
     var rr = relevanceScore(job);
     s += rr.rel;                       // strong weight on title relevance
     job.relScore = rr.rel;
+    job.family = rr.family; job.matchType = rr.matchType; // stored for the relevance diagnostic — spec point 11
     job.isStretch = (cvSkills.length > 0 || document.getElementById('jobQuery').value.trim()) && rr.rel === 0;
     var q = document.getElementById('jobQuery').value.trim().toLowerCase();
     if(q && job.title.toLowerCase().indexOf(q)>-1) s += 3;
@@ -4219,6 +4286,7 @@
     // QUALITY actually affects ranking, not just email presence.
     if(!job.isStretch) s += emailConfidenceBoost(job);
     if(job.isStretch) s = Math.min(s - 14, 2); // off-field fillers: hard-capped low, never allowed to look decent
+    job.score = s; // stored so the relevance diagnostic (spec point 11) reports the actual final score, not a partial one
     return s;
   }
 
@@ -5144,6 +5212,7 @@
         var lastResortGuesses = applyLastResortEmailGuess(list); // see this function's own comment — catches every job the capped pipeline above never got to
         list.forEach(function(j){ j.score = scoreJob(j); j.days = j.date ? daysAgo(j.date) : null; });
         list.sort(function(a,b){ return (b.score - a.score) || ((a.days==null?15:a.days) - (b.days==null?15:b.days)); });
+        logRelevanceDiagnostics(list); // spec point 11 — real, inspectable reason for every job's match/non-match, logged once the final order is set
         list.forEach(function(j){ j.applicationMethod = j.email ? 'email' : 'platform'; });
         // Pinpointing exactly which filter accounts for the 40\u219227 HireLebanese
         // drop reported by the user — tracking the count through each of the
@@ -5218,11 +5287,18 @@
           backgroundPageScanBySource(hlStillNeedsRealScan, 'HireLebanese'),
           backgroundPageScanBySource(wsStillNeedsRealScan, 'WebSearch')
         ]).then(function(){
-          // Second layer specifically for WebSearch, per explicit quality
-          // target: only fires for whatever still has no email after the
-          // job's-own-page scan above — tries the company's real domain +
-          // real site next, rather than settling for a weak guess.
-          deepEnrichWebSearchJobs(allJobs).then(function(){
+          // Real ask: AI title classification runs FIRST in this chain,
+          // before email enrichment — jobs it promotes from "different
+          // field" to relevant should then correctly benefit from the
+          // existing relevant-first prioritization in AI research below,
+          // not be treated as already-decided by the time enrichment runs.
+          classifyUnknownTitles(allJobs).then(function(){
+            // Second layer specifically for WebSearch, per explicit quality
+            // target: only fires for whatever still has no email after the
+            // job's-own-page scan above — tries the company's real domain +
+            // real site next, rather than settling for a weak guess.
+            return deepEnrichWebSearchJobs(allJobs);
+          }).then(function(){
             // Last layer, only reached for whatever every deterministic
             // layer above still couldn't find an email for. Genuinely
             // zero-cost when OPENAI_RESEARCH_ENABLED is off — the backend
