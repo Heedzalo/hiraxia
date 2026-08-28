@@ -2567,7 +2567,13 @@
       'bdr','sdr','head of sales','vp sales','chief revenue officer','cro'],
     marketing:['marketing','seo','content','social media','brand','growth','communications','pr ',
       'digital marketing','sem specialist','product marketing'],
-    software:['developer','engineer','programmer','software','full stack','backend','frontend','devops',
+    // Real bug found via testing: bare 'engineer' matched ANY title
+    // containing that word (Sales Engineer, Aircraft Engineer, Civil
+    // Engineer, etc.), not just software roles — same collision category
+    // as the earlier bare 'account' bug. Replaced with 'software
+    // engineer' explicitly; the other specific compound terms already
+    // cover real software-engineering variants without the bare word.
+    software:['developer','software engineer','programmer','software','full stack','backend','frontend','devops',
       'qa engineer','test engineer','automation engineer','site reliability','sre','cloud engineer',
       'platform engineer','mobile developer','ios developer','android developer','web developer','cto'],
     design:['designer','ui designer','ux designer','ux/ui','graphic','creative director','art director',
@@ -4155,12 +4161,28 @@
     var titleNorm = stripSeniority(title); // "Senior Product Manager" -> "product manager", so seniority-prefixed titles match the same family terms without needing a separate entry per level
     var rel = 0, matchedFamily = false;
     var matchedFamilyName = null, matchType = 'none'; // real ask (spec point 11): track WHY a job matched, not just whether it did
+    var negativeSignal = null;
     // direct CV skill in the title
     cvSkills.forEach(function(sk){ if(title.indexOf(sk)>-1) rel += 4; });
     // role-family kinship: if the CV or query implies a family, reward siblings
     var q = document.getElementById('jobQuery').value.trim().toLowerCase();
     var qNorm = stripSeniority(q);
     var profileText = stripSeniority(cvSkills.join(' ')+' '+q);
+    // Real bug found via user report: "Security Engineer - Product" scored
+    // 55% relevant for a "Product Manager" search — the word-overlap
+    // fallback below matched purely on the shared word "product", even
+    // though "security engineer" already clearly, definitively belongs to
+    // a DIFFERENT family (it_security). The fallback was only ever meant
+    // for titles with no clear family at all; it was firing even when a
+    // clear, contradicting family match already existed. Fix: find the
+    // title's own best-matching family FIRST, independently of the query,
+    // so a definitive mismatch can block the weak fallback below.
+    var queryFamily = null, titleOwnFamily = null;
+    Object.keys(ROLE_FAMILIES).forEach(function(fam){
+      var terms = ROLE_FAMILIES[fam];
+      if(!queryFamily && (terms.some(function(term){ return qNorm.indexOf(term)>-1; }) || qNorm.indexOf(fam)>-1)) queryFamily = fam;
+      if(!titleOwnFamily && terms.some(function(term){ return titleNorm.indexOf(term)>-1; })) titleOwnFamily = fam;
+    });
     Object.keys(ROLE_FAMILIES).forEach(function(fam){
       var terms = ROLE_FAMILIES[fam];
       var profileInFam = terms.some(function(term){ return profileText.indexOf(term)>-1; }) || profileText.indexOf(fam)>-1;
@@ -4179,16 +4201,24 @@
     // catches roles no one has explicitly covered yet instead of silently
     // burying them as "different field".
     if(rel === 0 && q){
-      var GENERIC_TITLE_WORDS = ['manager','senior','junior','lead','associate','assistant','specialist',
-        'coordinator','officer','director','head','chief','vp','executive','representative','intern',
-        'trainee','entry','level','full','time','part','remote','staff','principal','global','regional',
-        'deputy','supervisor','and','of','for','the','a','an'];
-      var sigWords = function(text){ return text.split(/\s+/).filter(function(w){ return w.length>=3 && GENERIC_TITLE_WORDS.indexOf(w)===-1; }); };
-      var qWords = sigWords(q);
-      var titleWords = sigWords(title);
-      if(qWords.some(function(w){ return titleWords.indexOf(w)>-1; })){ rel += 3; matchType = 'word overlap'; }
+      if(titleOwnFamily && queryFamily && titleOwnFamily !== queryFamily){
+        // Definitive negative signal: the title clearly belongs to a
+        // DIFFERENT, specific occupation than what was searched — a
+        // shared incidental word (like "product" in "Security Engineer -
+        // Product") must not override that. Fallback does not fire here.
+        negativeSignal = 'occupation mismatch (' + titleOwnFamily + ' \u2260 ' + queryFamily + ')';
+      } else {
+        var GENERIC_TITLE_WORDS = ['manager','senior','junior','lead','associate','assistant','specialist',
+          'coordinator','officer','director','head','chief','vp','executive','representative','intern',
+          'trainee','entry','level','full','time','part','remote','staff','principal','global','regional',
+          'deputy','supervisor','and','of','for','the','a','an'];
+        var sigWords = function(text){ return text.split(/\s+/).filter(function(w){ return w.length>=3 && GENERIC_TITLE_WORDS.indexOf(w)===-1; }); };
+        var qWords = sigWords(q);
+        var titleWords = sigWords(title);
+        if(qWords.some(function(w){ return titleWords.indexOf(w)>-1; })){ rel += 3; matchType = 'word overlap'; }
+      }
     }
-    return { rel:rel, matchedFamily:matchedFamily, family:matchedFamilyName, matchType:matchType };
+    return { rel:rel, matchedFamily:matchedFamily, family:matchedFamilyName||titleOwnFamily, matchType:matchType, negativeSignal:negativeSignal };
   }
   // Real ask (spec point 11): a real, inspectable diagnostic showing WHY
   // each job matched or didn't — not just the final score. Logs in the
@@ -4200,7 +4230,7 @@
     var lines = ['RELEVANCE DIAGNOSTIC for query: "'+q+'"'];
     jobs.slice(0, 100).forEach(function(j){ // capped — this is a debug view, not meant to print thousands of lines
       if(j.isStretch){
-        lines.push('\u2717 '+j.title+' — reason: different role family'+(j.aiClassified===false ? ' (AI-checked, no match)' : ''));
+        lines.push('\u2717 '+j.title+' — reason: '+(j.negativeSignal || 'different role family')+(j.aiClassified===false ? ' (AI-checked, no match)' : ''));
       } else {
         var fam = j.family ? j.family.toUpperCase() : (j.aiClassified ? 'AI-CLASSIFIED' : '(word-level match)');
         lines.push('\u2713 '+j.title+' — family: '+fam+' — match: '+(j.matchType||'unknown')+' — score: '+(j.score!=null?j.score:j.relScore));
@@ -4264,7 +4294,7 @@
     var rr = relevanceScore(job);
     s += rr.rel;                       // strong weight on title relevance
     job.relScore = rr.rel;
-    job.family = rr.family; job.matchType = rr.matchType; // stored for the relevance diagnostic — spec point 11
+    job.family = rr.family; job.matchType = rr.matchType; job.negativeSignal = rr.negativeSignal; // stored for the relevance diagnostic — spec point 11
     job.isStretch = (cvSkills.length > 0 || document.getElementById('jobQuery').value.trim()) && rr.rel === 0;
     var q = document.getElementById('jobQuery').value.trim().toLowerCase();
     if(q && job.title.toLowerCase().indexOf(q)>-1) s += 3;
@@ -5007,6 +5037,7 @@
     window.__hireLebaneseDiag = null;
     window.__webSearchDiag = null;
     window.__extraDiagLines = []; // reset per search — otherwise a new search's diagnostic line would start with every line accumulated from the previous one still attached
+    window.__searchInProgress = true; // cleared by finalizeDiagLine() once the whole background pipeline genuinely finishes — see appendDiagLine's own comment
     window.__hlCountTrace = null;
     window.__hlEarlyTrace = null;
     window.__hlLastResortTrace = null;
@@ -5306,6 +5337,7 @@
             return runAiResearch(allJobs, 'search_'+Date.now());
           }).then(function(){
             buildProductionDiagnosticReport(allJobs, rawJobsCount, uniqueJobsCount);
+            finalizeDiagLine(); // the one, true end of the pipeline — reveals the complete diagnostic in a single stable update, replacing the "still working" placeholder
           });
           backgroundVerifyLastResortGuesses(lastResortGuesses); // quiet upgrade pass for whatever's left — see its own comment for why this happens after render, not before
         });
@@ -5591,17 +5623,39 @@
   // window.__extraDiagLines, and BOTH renderJobs() and appendDiagLine()
   // always rebuild the full text from the stored base + all accumulated
   // extras, so nothing already added can ever be lost by a later call.
+  // Real ask: the diagnostic line was updating live, multiple separate
+  // times, as each background step finished (page-scan, email research,
+  // AI research, etc.) — each update is a real, visible flash on a small
+  // phone screen, reading exactly like "appears then gets overwritten"
+  // even though technically nothing was being lost, just added to too
+  // fast to track. Real fix: show one calm, stable message while work is
+  // still happening, and only reveal the real diagnostic ONCE, when the
+  // whole pipeline is genuinely finished — see finalizeDiagLine below.
   function appendDiagLine(text){
     window.__extraDiagLines = window.__extraDiagLines || [];
     window.__extraDiagLines.push(text);
+    if(window.__searchInProgress) return; // accumulate silently — don't flash a partial update on screen
     var sl = document.getElementById('srcLine');
     if(sl) sl.textContent = (window.__srcLineBase||'') + (window.__extraDiagLines.length ? ' \u00b7 '+window.__extraDiagLines.join(' \u00b7 ') : '');
+  }
+  // Called once, at the true end of the whole background pipeline —
+  // reveals the complete, final diagnostic text in a single stable
+  // update instead of the many rapid ones that were flickering before.
+  function finalizeDiagLine(){
+    window.__searchInProgress = false;
+    var sl = document.getElementById('srcLine');
+    if(sl) sl.textContent = (window.__srcLineBase||'') + (window.__extraDiagLines && window.__extraDiagLines.length ? ' \u00b7 '+window.__extraDiagLines.join(' \u00b7 ') : '');
   }
   function renderJobs(okSources, srcNames){
     renderJobs.lastOk = okSources; renderJobs.lastSrcNames = srcNames;
     var list = document.getElementById('matchList');
     window.__srcLineBase = okSources ? t('srcLineLiveFrom',{sources:srcNames.join(', ')}) : '';
-    document.getElementById('srcLine').textContent = window.__srcLineBase + (window.__extraDiagLines && window.__extraDiagLines.length ? ' \u00b7 '+window.__extraDiagLines.join(' \u00b7 ') : '');
+    // While background enrichment is still running, show one calm, stable
+    // message instead of the real (still-growing, previously flickering)
+    // diagnostic text — see appendDiagLine/finalizeDiagLine above.
+    document.getElementById('srcLine').textContent = window.__searchInProgress
+      ? window.__srcLineBase + ' \u00b7 finding emails and enriching results in the background\u2026'
+      : window.__srcLineBase + (window.__extraDiagLines && window.__extraDiagLines.length ? ' \u00b7 '+window.__extraDiagLines.join(' \u00b7 ') : '');
     var copyBtn = document.getElementById('copyDiagBtn');
     if(copyBtn){
       copyBtn.style.display = okSources ? 'inline-block' : 'none';
