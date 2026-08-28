@@ -2680,6 +2680,20 @@
       adjacent:['aviation maintenance','ground operations','aircraft','aviation','avionics','airframe','powerplant',
         'fuselage','airworthiness','mro technician','mro mechanic','ame','lae','b1 technician','b2 technician',
         'line maintenance','base maintenance','heavy maintenance','ramp mechanic','a&p mechanic']
+    },
+    // Real gap found via user report: a live "Electrician" search buried
+    // "Electrical Technician" as a different-field result — genuinely the
+    // same trade, but neither the taxonomy nor the weak-word-overlap
+    // fallback caught it, since "electrician"/"electrical" are different
+    // strings with no substring overlap. Skilled trades were never part
+    // of the original 24 families (which focused on office/corporate
+    // roles) — this is a real, new gap, not something already specified
+    // and missed.
+    trades: {
+      core:['electrician','electrical technician','plumber','hvac technician','hvac',
+        'carpenter','welder','mechanic','maintenance technician','maintenance electrician'],
+      adjacent:['handyman','general maintenance','facilities technician','building technician',
+        'refrigeration technician','ac technician','air conditioning technician','pipefitter','fitter']
     }
   };
   // Backward-compatible flat view — anything elsewhere in the file still
@@ -4328,9 +4342,16 @@
   // as equivalent the way a flat "has an email" boost did before.
   function emailConfidenceBoost(job){
     var tier = emailConfidenceTier(job);
-    if(tier===1) return 8; // VERIFIED — matches/exceeds the top location-match boost, so a real on-page email reliably surfaces near the top
-    if(tier===3) return 6; // CONFIRMED — AI/web-search found with real evidence
-    if(tier===4) return 4; // SHARED CACHE — real, but reused rather than freshly confirmed
+    // Real ask: RELEVANCE > LOCATION > FRESHNESS > VERIFIED EMAIL >
+    // SOURCE QUALITY — location (8) now clearly outweighs even a
+    // verified email (previously tied at 8 each). Kept as a real,
+    // meaningful boost rather than pushed below freshness (max 3) —
+    // doing that literally would make a verified email barely register
+    // at all, which contradicts the same request's "a verified email
+    // should give a meaningful boost among otherwise relevant jobs".
+    if(tier===1) return 6; // VERIFIED — real, meaningful, but no longer ties/beats an in-country location match
+    if(tier===3) return 5; // CONFIRMED — AI/web-search found with real evidence
+    if(tier===4) return 3; // SHARED CACHE — real, but reused rather than freshly confirmed
     if(tier===5) return 1; // PREDICTED — barely above nothing; never allowed to look like a real email
     return 0;
   }
@@ -4534,6 +4555,59 @@
       // nothing" and "the request actually failed" look identical — with
       // no way to tell which happened. Now surfaces the real reason.
       .catch(function(e){ appendDiagLine('AI-Discovery: request failed — '+String(e.message||e).slice(0,150)); return []; });
+  }
+  // Real ask: "take its time until it gets at least 25 jobs with real
+  // emails" — genuinely can't work as a single blocking request (a
+  // smaller version of this already hit a real timeout earlier this
+  // session). This starts a background job on the backend, then polls
+  // for progress every few seconds — never blocking the main search,
+  // merging results into the live job list as they actually arrive,
+  // same "background enrichment" pattern as deepEnrichWebSearchJobs and
+  // runAiResearch, just running for potentially much longer.
+  var ASYNC_DISCOVERY_POLL_MS = 4000;
+  var ASYNC_DISCOVERY_MAX_POLLS = 130; // ~8-9 minutes, matching the backend's own wall-clock ceiling with a little slack
+  function startAsyncDiscovery(q, location, targetCount){
+    var base = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
+    return fetchWithTimeout(base+'/ai-discover-jobs-async', {
+      method:'POST', headers: backendHeaders({'Content-Type':'application/json'}),
+      body: JSON.stringify({ query: q||'', location: location||'', targetCount: targetCount||25 })
+    }, 15000) // this call itself is fast — it only starts the job and returns a jobId, the real work happens in the background
+      .then(function(r){ return r.ok ? r.json() : {enabled:false}; })
+      .then(function(d){
+        if(!d.enabled || !d.jobId){ appendDiagLine('Deep discovery: disabled or failed to start'); return; }
+        appendDiagLine('Deep discovery: started (target '+(targetCount||25)+' jobs with real emails, this can take several minutes in the background)');
+        var seenUrls = {};
+        var poll = 0;
+        function checkStatus(){
+          poll++;
+          fetchWithTimeout(base+'/ai-discover-status/'+d.jobId, { headers: backendHeaders({}) }, 15000)
+            .then(function(r){ return r.ok ? r.json() : {status:'error'}; })
+            .then(function(status){
+              var newJobs = (status.results||[]).filter(function(j){ return j.url && !seenUrls[j.url]; });
+              if(newJobs.length){
+                newJobs.forEach(function(j){ seenUrls[j.url] = true; });
+                var mapped = newJobs.map(function(j){
+                  return { title:j.title||'', company:j.company||'', loc:j.location||location||'', url:j.url||'', desc:j.snippet||'', date:'', src:'AI-Discovery',
+                    email:j.email||null, emailPredicted:false, emailVerified:j.confidence==='high' };
+                });
+                allJobs = allJobs.concat(mapped);
+                allJobs = markAppliedJobs(allJobs);
+                appendDiagLine('Deep discovery: '+status.foundCount+'/'+status.targetCount+' jobs with real emails found so far');
+                if(renderJobs.lastOk !== undefined) renderJobs(renderJobs.lastOk, renderJobs.lastSrcNames);
+              }
+              if(status.status === 'complete' || status.status === 'failed'){
+                appendDiagLine('Deep discovery: '+status.status+(status.reason?' ('+status.reason+')':'')+' — '+status.foundCount+' total jobs with real emails');
+                if(renderJobs.lastOk !== undefined) renderJobs(renderJobs.lastOk, renderJobs.lastSrcNames);
+                return;
+              }
+              if(poll < ASYNC_DISCOVERY_MAX_POLLS) setTimeout(checkStatus, ASYNC_DISCOVERY_POLL_MS);
+              else appendDiagLine('Deep discovery: stopped polling after the maximum wait — '+status.foundCount+' jobs found so far, job may still be finishing on the server');
+            })
+            .catch(function(){ if(poll < ASYNC_DISCOVERY_MAX_POLLS) setTimeout(checkStatus, ASYNC_DISCOVERY_POLL_MS); }); // a single failed poll doesn't give up — just tries again next interval
+        }
+        setTimeout(checkStatus, ASYNC_DISCOVERY_POLL_MS);
+      })
+      .catch(function(e){ appendDiagLine('Deep discovery: failed to start — '+String(e.message||e).slice(0,150)); });
   }
   function sourceJobsPipe(q, countryIso){
     var base = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
@@ -5393,6 +5467,18 @@
             finalizeDiagLine(); // the one, true end of the pipeline — reveals the complete diagnostic in a single stable update, replacing the "still working" placeholder
           });
           backgroundVerifyLastResortGuesses(lastResortGuesses); // quiet upgrade pass for whatever's left — see its own comment for why this happens after render, not before
+          // Real ask: "take its time until at least 25 jobs with real
+          // emails" — fired here as a genuinely independent background
+          // task, NOT chained into the pipeline above. It can keep running
+          // for several minutes after everything else has already
+          // finished and finalizeDiagLine() has already revealed the
+          // "final" diagnostic — its own progress updates still show up
+          // live as they arrive (appendDiagLine correctly handles this:
+          // once __searchInProgress is false, every new line updates the
+          // screen immediately, exactly the real-time visibility this
+          // specific long-running task needs). Harmless, instant no-op
+          // when AI_DISCOVERY_ENABLED is off on the backend.
+          startAsyncDiscovery(q, curCity() || c.gj || '', 25);
         });
         setTimeout(autoDiscoverFromResults, 400); // quiet background check, never blocks the UI
         if(fails.length){
@@ -5753,6 +5839,15 @@
       if(geoView==='mena') return menaMatch(j.loc) || geoMatchStrict(j.loc, c2);
       if(geoView==='remote') return isRemoteish(j.loc);
       if(geoView==='email') return !!j.email;
+      // Real bug found via user report: the "different field" section was
+      // showing jobs from Dubai/Saudi Arabia/Canada/Brazil/etc. labeled
+      // "near you" for a Lebanon search — role-irrelevant jobs were never
+      // filtered by location at all, just dumped in regardless of where
+      // in the world they actually were. A job that's neither role-
+      // relevant NOR anywhere near the searched location has no honest
+      // reason to be shown at all — this is the actual fix, not just a
+      // relabel: genuinely unrelated-everything jobs are dropped here.
+      if(j.isStretch) return geoMatchStrict(j.loc, c2) || menaMatch(j.loc) || isRemoteish(j.loc);
       return true;
     });
     if(!view.length && allJobs.length){
