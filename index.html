@@ -3267,44 +3267,45 @@
   // hand-parsed from a raw dump afterward.
   function buildProductionDiagnosticReport(jobs, rawCount, uniqueCount){
     var relevant = jobs.filter(function(j){ return !j.isStretch; });
-    function srcHas(j, tag){ return (j.src||'').indexOf(tag) > -1; }
-    var directPage = relevant.filter(function(j){ return j.email && (srcHas(j,'email via job page') || srcHas(j,'email via homepage scan')); });
-    var officialDomain = relevant.filter(function(j){ return j.email && srcHas(j,'email via company site') && !directPage.includes(j); });
-    var sameEmployer = relevant.filter(function(j){ return j.email && srcHas(j,'email via same-employer match'); });
-    var guessed = relevant.filter(function(j){ return j.email && j.emailPredicted; });
-    var noEmail = relevant.filter(function(j){ return !j.email; });
-    var accountedFor = directPage.concat(officialDomain, sameEmployer, guessed);
-    var otherReal = relevant.filter(function(j){ return j.email && !j.emailPredicted && accountedFor.indexOf(j)===-1; }); // has a real email but none of the above tags matched (e.g. came pre-filled from a source API directly)
-    var withEmail = relevant.filter(function(j){ return j.email; });
+    var secondary = jobs.filter(function(j){ return j.isStretch; });
+    // Real ask: report against the same real confidence hierarchy the
+    // ranking itself now uses (emailConfidenceTier), not a separate,
+    // possibly-drifting categorization — one source of truth for both.
+    var verified = relevant.filter(function(j){ return emailConfidenceTier(j)===1; });
+    var confirmed = relevant.filter(function(j){ return emailConfidenceTier(j)===3; });
+    var sharedCache = relevant.filter(function(j){ return emailConfidenceTier(j)===4; });
+    var predicted = relevant.filter(function(j){ return emailConfidenceTier(j)===5; });
+    var platformOnly = relevant.filter(function(j){ return !j.email; });
+    var withRealEmail = verified.concat(confirmed, sharedCache); // levels 1\u20134 — genuinely real, never predicted
     var STRONG_PREFIX = /^(careers?|recruit(?:ing|ment)?|talent|hr|jobs)@/i;
-    var strong = withEmail.filter(function(j){ return STRONG_PREFIX.test(j.email); });
-    var generic = withEmail.filter(function(j){ return !STRONG_PREFIX.test(j.email); });
+    var strong = withRealEmail.filter(function(j){ return STRONG_PREFIX.test(j.email); });
+    var generic = withRealEmail.filter(function(j){ return !STRONG_PREFIX.test(j.email); });
 
     var stats = window.__enrichStats || { companiesEnriched:0, serperQueries:0, domainsFound:0 };
-    var costPerEmail = withEmail.length ? (stats.serperQueries/withEmail.length).toFixed(2) : 'n/a';
+    var costPerEmail = withRealEmail.length ? (stats.serperQueries/withRealEmail.length).toFixed(2) : 'n/a';
 
     var lines = [
       'PRODUCTION DIAGNOSTIC',
-      'Jobs discovered (raw, pre-dedup): '+rawCount,
+      'Jobs found (raw, pre-dedup): '+rawCount,
       'Unique after dedupe: '+uniqueCount,
-      'Relevant (non-stretch): '+relevant.length,
+      'Relevant jobs (primary results): '+relevant.length,
+      'Secondary / different-field jobs (shown separately, never in primary ranking): '+secondary.length,
       '',
-      'Email results:',
-      '  Direct job-page email: '+directPage.length,
-      '  Official-company-site email: '+officialDomain.length,
-      '  Reused from same employer: '+sameEmployer.length,
-      '  From a source API directly (unattributed): '+otherReal.length,
-      '  Guessed (not confirmed): '+guessed.length,
-      '  No email: '+noEmail.length,
+      'Email confidence (relevant jobs only):',
+      '  1/2 VERIFIED (found on job posting or company site directly): '+verified.length,
+      '  3 CONFIRMED (AI research / web search, with a source): '+confirmed.length,
+      '  4 SHARED CACHE (real email, reused from same company): '+sharedCache.length,
+      '  5 PREDICTED (guessed — never counted as a real email): '+predicted.length,
+      '  Platform-only / no application path: '+platformOnly.length,
       '',
-      '  Strong recruiting-style emails (careers/hr/recruitment/talent/jobs@): '+strong.length,
-      '  Generic emails (info@/contact@/other): '+generic.length,
+      '  Real (levels 1\u20134) emails, strong recruiting-style (careers/hr/recruitment/talent/jobs@): '+strong.length,
+      '  Real (levels 1\u20134) emails, generic (info@/contact@/other): '+generic.length,
       '',
       'Enrichment cost:',
       '  Companies enriched: '+stats.companiesEnriched,
       '  Serper queries used: '+stats.serperQueries,
       '  Domains found: '+stats.domainsFound,
-      '  Real (non-guessed) emails found: '+withEmail.filter(function(j){return !j.emailPredicted;}).length,
+      '  Real (non-predicted) emails found: '+withRealEmail.length,
       '  Serper queries per real email found: '+costPerEmail
     ];
     window.__productionDiagReport = lines.join('\n');
@@ -4059,6 +4060,42 @@
     var re = new RegExp('\\b'+sk.replace(/[.*+?^${}()|[\\]\\\\]/g,'\\\\$&')+'\\b', 'i');
     return re.test(hay);
   }
+  // Real ask: a strict email confidence hierarchy — predicted emails must
+  // never rank the same as genuinely verified ones. Returns 1 (highest
+  // confidence) through 5 (predicted/guessed), or 0 for no email at all.
+  // Classification is based on the real src tags already written by every
+  // email-finding path in this file — no new tracking needed, just
+  // reading what's already there consistently.
+  function emailConfidenceTier(job){
+    if(!job.email) return 0;
+    if(job.emailPredicted) return 5; // PREDICTED — guessed from a pattern, never verified
+    var src = job.src || '';
+    // Tier 1/2 VERIFIED: the email was actually read off a real page —
+    // the job posting itself, or the company's own site.
+    if(src.indexOf('email via job page')>-1 || src.indexOf('email via homepage scan')>-1 ||
+       src.indexOf('email via company site')>-1 ||
+       src.indexOf('email via AI research: official_company_website')>-1 ||
+       src.indexOf('email via AI research: job_posting')>-1) return 1;
+    // Tier 3 CONFIRMED: AI research or web-search found it with a source,
+    // just not directly on the company's own primary page.
+    if(src.indexOf('email via AI research')>-1) return 3;
+    // Tier 4 SHARED CACHE: a real email, but reused from elsewhere rather
+    // than freshly confirmed for this specific job.
+    if(src.indexOf('email via shared cache')>-1 || src.indexOf('email via same-employer match')>-1) return 4;
+    return 3; // a real (non-predicted) email via some other source not explicitly tagged above — treat as CONFIRMED, the safe middle default
+  }
+  // Proportional boost per tier — verified emails rank meaningfully above
+  // confirmed, which ranks above shared-cache, which ranks above
+  // predicted (barely better than no email at all), never all treated
+  // as equivalent the way a flat "has an email" boost did before.
+  function emailConfidenceBoost(job){
+    var tier = emailConfidenceTier(job);
+    if(tier===1) return 8; // VERIFIED — matches/exceeds the top location-match boost, so a real on-page email reliably surfaces near the top
+    if(tier===3) return 6; // CONFIRMED — AI/web-search found with real evidence
+    if(tier===4) return 4; // SHARED CACHE — real, but reused rather than freshly confirmed
+    if(tier===5) return 1; // PREDICTED — barely above nothing; never allowed to look like a real email
+    return 0;
+  }
   function scoreJob(job){
     var s = 0;
     var hay = (job.title+' '+job.desc).toLowerCase();
@@ -4087,18 +4124,11 @@
       else s -= 5;
     }
     if(job.nearbyRole && !job.isStretch) s += 4; // same field, nearby country — keep it high
-    // zero-signup jobs (direct email apply) get a real ranking boost, not just a display tag —
-    // this is the concrete "basics for launch" answer to platform-signup friction: when two
-    // jobs are comparably relevant, the one that needs NO third-party account surfaces first.
-    if(job.email && !job.isStretch) s += 3;
-    // Real ask: AI-research-found emails should always rank above other
-    // email types, not just tie with them. A strong boost specifically
-    // for this source — larger than any other single factor here except
-    // an exact in-country location match — so these consistently surface
-    // near the top of results and within the email-apply filter
-    // specifically, while isStretch (off-field fillers) still correctly
-    // caps genuinely irrelevant jobs regardless of email source.
-    if(job.src && job.src.indexOf('email via AI research') > -1 && !job.isStretch) s += 7;
+    // Real ask: predicted emails were getting the SAME ranking boost as
+    // genuinely verified ones (a flat +3 for "has any email at all") —
+    // this replaces that with a real confidence hierarchy, so email
+    // QUALITY actually affects ranking, not just email presence.
+    if(!job.isStretch) s += emailConfidenceBoost(job);
     if(job.isStretch) s = Math.min(s - 14, 2); // off-field fillers: hard-capped low, never allowed to look decent
     return s;
   }
