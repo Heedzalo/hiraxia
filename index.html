@@ -2694,6 +2694,16 @@
         'carpenter','welder','mechanic','maintenance technician','maintenance electrician'],
       adjacent:['handyman','general maintenance','facilities technician','building technician',
         'refrigeration technician','ac technician','air conditioning technician','pipefitter','fitter']
+    },
+    // Real gap found via user report: "Driver" and "Delivery Rider" were
+    // scoring as completely unrelated — no transportation/driving family
+    // existed at all (the only "delivery" match was "delivery manager"
+    // under project management, unrelated to actual driving jobs).
+    transportation: {
+      core:['driver','delivery','delivery driver','delivery rider','moto driver','van driver','truck driver',
+        'courier','dispatch rider','cash van driver','distribution driver'],
+      adjacent:['chauffeur','logistics driver','fleet driver','motorcycle rider','bike courier',
+        'delivery bike driver','transport driver','driving job']
     }
   };
   // Backward-compatible flat view — anything elsewhere in the file still
