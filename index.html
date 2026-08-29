@@ -3026,7 +3026,7 @@
           if(email){
             j.email = email; found++;
             j.src = (j.src||'') + ' (email via screenshot)';
-            if(host) emailCacheSet(guessDomainFromUrl(j.url) || host, email); // learn it, forever
+            if(host) emailCacheSet(guessDomainFromUrl(j.url) || host, email, true); // genuinely visible in the actual screenshot, not a guess — learn it, forever
           } else {
             errors.push((host||'?')+': no email visible in screenshot');
           }
@@ -3127,7 +3127,7 @@
             j.email = d.email; found++;
             j.src = (j.src||'') + ' (email via backend)';
             var domain = guessDomainFromUrl(j.url) || (function(){ try{ return new URL(j.url).hostname; }catch(e){ return null; } })();
-            if(domain) emailCacheSet(domain, d.email);
+            if(domain) emailCacheSet(domain, d.email, true); // /extract-email finds a real, explicit email on the actual page — not a guess
           } else { errors++; }
         })
         .catch(function(){ errors++; });
@@ -3596,7 +3596,7 @@
         if(email){
           j.email = email; found++;
           j.src = (j.src||'') + ' (email via '+label+')';
-          if(domainForCache){ try{ emailCacheSet(domainForCache, email); }catch(e){} }
+          if(domainForCache){ try{ emailCacheSet(domainForCache, email, true); }catch(e){} } // extracted from real page text, not a guess
           return true;
         }
         return false;
@@ -4129,7 +4129,7 @@
           if(pageEmail){
             j.email = pageEmail; found++;
             j.src = (j.src||'') + ' (email via homepage scan)';
-            try{ emailCacheSet(domain, pageEmail); }catch(e){}
+            try{ emailCacheSet(domain, pageEmail, true); }catch(e){} // genuinely found on the real homepage, not a guess
             return { job: j, domain: null }; // already solved, Hunter not needed
           }
           return { job: j, domain: domain }; // still needs Hunter
@@ -4589,6 +4589,14 @@
                 });
                 allJobs = allJobs.concat(mapped);
                 allJobs = markAppliedJobs(allJobs);
+                // Real bug found via user report: newly-merged async-discovery
+                // jobs never got scoreJob() called on them (every OTHER place
+                // jobs enter allJobs does this) — .score stayed undefined,
+                // producing "NaN%" on screen. Re-scoring the whole pool here
+                // matches the exact pattern already used elsewhere when jobs
+                // get merged in later (e.g. the city-level deep scan) — safe
+                // and cheap to re-score already-scored jobs too.
+                allJobs.forEach(function(j){ j.score = scoreJob(j); j.days = j.date ? daysAgo(j.date) : null; });
                 appendDiagLine('Deep discovery: '+status.foundCount+'/'+status.targetCount+' jobs with real emails found so far');
                 if(renderJobs.lastOk !== undefined) renderJobs(renderJobs.lastOk, renderJobs.lastSrcNames);
               }
@@ -4605,6 +4613,62 @@
         setTimeout(checkStatus, ASYNC_DISCOVERY_POLL_MS);
       })
       .catch(function(e){ appendDiagLine('Deep discovery: failed to start — '+String(e.message||e).slice(0,150)); });
+  }
+  // Real ask: "give AI research more room to convert predicted emails to
+  // real ones — I don't care about cost, it's permanent in cache." Same
+  // async/polling pattern as discovery, but for EXISTING relevant jobs
+  // that still only have a predicted email — updates them IN PLACE
+  // (matching by URL) rather than adding new job cards.
+  function startAsyncEnrichment(jobs){
+    var candidates = jobs.filter(function(j){ return !j.isStretch && j.emailPredicted; }).map(function(j){
+      return { title:j.title, company:j.company, loc:j.loc, url:j.url, desc:j.desc };
+    });
+    if(!candidates.length) return Promise.resolve();
+    var base = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
+    return fetchWithTimeout(base+'/ai-enrich-jobs-async', {
+      method:'POST', headers: backendHeaders({'Content-Type':'application/json'}),
+      body: JSON.stringify({ jobs: candidates, targetCount: candidates.length })
+    }, 15000) // this call itself is fast — only starts the job and returns a jobId
+      .then(function(r){ return r.ok ? r.json() : {enabled:false}; })
+      .then(function(d){
+        if(!d.enabled || !d.jobId){ appendDiagLine('Predicted\u2192real email upgrade: disabled or failed to start'); return; }
+        appendDiagLine('Predicted\u2192real email upgrade: started ('+candidates.length+' predicted-email jobs in your results, this can take several minutes in the background)');
+        var appliedUrls = {};
+        var poll = 0;
+        function checkStatus(){
+          poll++;
+          fetchWithTimeout(base+'/ai-discover-status/'+d.jobId, { headers: backendHeaders({}) }, 15000) // same status endpoint — the enrichment job writes to the same collection/shape
+            .then(function(r){ return r.ok ? r.json() : {status:'error'}; })
+            .then(function(status){
+              var newResults = (status.results||[]).filter(function(r){ return r.url && !appliedUrls[r.url]; });
+              if(newResults.length){
+                newResults.forEach(function(r){
+                  appliedUrls[r.url] = true;
+                  var match = allJobs.find(function(j){ return j.url === r.url; });
+                  if(match){
+                    match.email = r.email;
+                    match.emailPredicted = false;
+                    match.emailVerified = r.confidence === 'high';
+                    match.src = (match.src||'') + ' (email via AI research: '+(r.sourceType||'upgraded from predicted')+')';
+                  }
+                });
+                allJobs.forEach(function(j){ j.score = scoreJob(j); }); // re-score so newly-real emails correctly outrank remaining predicted ones
+                appendDiagLine('Predicted\u2192real email upgrade: '+status.foundCount+'/'+status.targetCount+' upgraded to real emails so far');
+                if(renderJobs.lastOk !== undefined) renderJobs(renderJobs.lastOk, renderJobs.lastSrcNames);
+              }
+              if(status.status === 'complete' || status.status === 'failed'){
+                appendDiagLine('Predicted\u2192real email upgrade: '+status.status+(status.reason?' ('+status.reason+')':'')+' \u2014 '+status.foundCount+' total upgraded');
+                if(renderJobs.lastOk !== undefined) renderJobs(renderJobs.lastOk, renderJobs.lastSrcNames);
+                return;
+              }
+              if(poll < ASYNC_DISCOVERY_MAX_POLLS) setTimeout(checkStatus, ASYNC_DISCOVERY_POLL_MS);
+              else appendDiagLine('Predicted\u2192real email upgrade: stopped polling after the maximum wait \u2014 '+status.foundCount+' upgraded so far, job may still be finishing on the server');
+            })
+            .catch(function(){ if(poll < ASYNC_DISCOVERY_MAX_POLLS) setTimeout(checkStatus, ASYNC_DISCOVERY_POLL_MS); });
+        }
+        setTimeout(checkStatus, ASYNC_DISCOVERY_POLL_MS);
+      })
+      .catch(function(e){ appendDiagLine('Predicted\u2192real email upgrade: failed to start \u2014 '+String(e.message||e).slice(0,150)); });
   }
   function sourceJobsPipe(q, countryIso){
     var base = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
@@ -5476,6 +5540,11 @@
           // specific long-running task needs). Harmless, instant no-op
           // when AI_DISCOVERY_ENABLED is off on the backend.
           startAsyncDiscovery(q, curCity() || c.gj || '', 25);
+          // Real ask: give the SAME safe async treatment to upgrading
+          // predicted emails on EXISTING relevant jobs, not just finding
+          // NEW ones — genuinely independent, no timeout ceiling, runs
+          // alongside deep discovery above.
+          startAsyncEnrichment(allJobs);
         });
         setTimeout(autoDiscoverFromResults, 400); // quiet background check, never blocks the UI
         if(fails.length){
