@@ -4636,12 +4636,20 @@
               // entry's email if deep discovery found a real one for a
               // job that previously had none or only a predicted one, so
               // the real find isn't wasted.
+              // Real bug found via user report: URL-only matching missed
+              // the SAME real job found via a different URL (e.g. once
+              // via HireLebanese's own feed, once via AI-Discovery's web
+              // search for the identical posting) — dedupeJobs() already
+              // correctly handles this elsewhere in the app using
+              // title+company as the key, not URL; this now matches that
+              // same, proven logic instead of a weaker URL-only check.
               var newJobs = [];
               var anyUpgraded = false;
               (status.results||[]).forEach(function(j){
                 if(!j.url || seenUrls[j.url]) return;
                 seenUrls[j.url] = true;
-                var existing = allJobs.find(function(e){ return e.url === j.url; });
+                var fp = (j.title+'|'+j.company).toLowerCase();
+                var existing = allJobs.find(function(e){ return e.url === j.url || (e.title+'|'+e.company).toLowerCase() === fp; });
                 if(existing){
                   if(j.email && (!existing.email || existing.emailPredicted)){
                     existing.email = j.email; existing.emailPredicted = false; existing.emailVerified = j.confidence === 'high';
@@ -4691,16 +4699,15 @@
   // that still only have a predicted email — updates them IN PLACE
   // (matching by URL) rather than adding new job cards.
   function startAsyncEnrichment(jobs){
-    // Real ask: only "same field" predicted-email jobs were getting a
-    // chance at upgrade before — but most of the predicted emails a
-    // search actually shows are in the "different field" section, which
-    // never got included at all. Now covers every predicted-email job,
-    // still processing relevant ones FIRST (more valuable to upgrade
-    // first, even though everything eventually gets a turn) rather than
-    // treating all in whatever order they happened to be in.
+    // Real ask: process ALL relevant (same-field) predicted-email jobs —
+    // no cap here, these are the ones that actually matter to the
+    // search. Off-field jobs get a real, deliberately SMALL cap instead
+    // of unlimited inclusion — genuinely less attention on jobs the
+    // search wasn't really about, more on the ones it was.
+    var OFF_FIELD_ENRICHMENT_CAP = 10;
     var allPredicted = jobs.filter(function(j){ return j.emailPredicted; });
     var relevant = allPredicted.filter(function(j){ return !j.isStretch; });
-    var offField = allPredicted.filter(function(j){ return j.isStretch; });
+    var offField = allPredicted.filter(function(j){ return j.isStretch; }).slice(0, OFF_FIELD_ENRICHMENT_CAP);
     var candidates = relevant.concat(offField).map(function(j){
       return { title:j.title, company:j.company, loc:j.loc, url:j.url, desc:j.desc };
     });
