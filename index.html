@@ -3750,16 +3750,37 @@
       // email was found for their own employer. This is the actual "search
       // once per unique employer, reuse across every job from them" step:
       // free, no new searches, just applying what scanOne already paid for.
+      // Real bug found via user report: "company" name propagation is
+      // only safe when it genuinely identifies ONE specific employer.
+      // Some sources (e.g. BeBee via JSearch) list a generic aggregator-
+      // style label like "Jobs for Lebanon" as the "company" for MANY
+      // different, unrelated real employers — propagating one of those
+      // employers' real email to every other job sharing that same
+      // generic label would misdirect applications to the wrong company
+      // entirely. Excluded from propagation (the email still applies
+      // correctly to the ONE job it was actually found for, just never
+      // spreads to others under the same generic label).
+      var GENERIC_COMPANY_NAME = /^(jobs? (for|in|at)|careers? (in|at)|(job )?opportunities( in| at)?|hiring (in|at)|vacanc(y|ies)( in| for)?)\b/i;
+      // Real, confirmed case from repeated evidence across this whole
+      // session: "We" has shown up as the "company" for many completely
+      // unrelated real jobs (driver, accountant, procurement...) — the
+      // same generic-label risk as "Jobs for Lebanon", just not caught
+      // by the pattern above since it doesn't start with a job-board-
+      // style prefix. Added as an explicit, known case rather than a
+      // broader "short company name" heuristic that risks excluding
+      // real, legitimately short company names.
+      var KNOWN_GENERIC_COMPANY_NAMES = ['we'];
+      function isGenericCompanyName(key){ return GENERIC_COMPANY_NAME.test(key) || KNOWN_GENERIC_COMPANY_NAMES.indexOf(key) > -1; }
       var byCompany = {};
       candidates.forEach(function(c){
         var key = (c.company||'').toLowerCase().trim();
-        if(key && c.email) byCompany[key] = c;
+        if(key && c.email && !isGenericCompanyName(key)) byCompany[key] = c;
       });
       var propagated = 0;
       jobs.forEach(function(j){
         if(j.email) return; // already has its own email, nothing to do
         var key = (j.company||'').toLowerCase().trim();
-        if(!key || !byCompany[key]) return;
+        if(!key || isGenericCompanyName(key) || !byCompany[key]) return;
         var source = byCompany[key];
         j.email = source.email;
         j.emailPredicted = source.emailPredicted;
@@ -4760,6 +4781,18 @@
               }
               if(status.status === 'complete' || status.status === 'failed'){
                 appendDiagLine('Deep discovery: '+status.status+(status.reason?' ('+status.reason+')':'')+' — '+status.foundCount+' real-email jobs (from '+(status.rawCandidates||0)+' raw candidates, '+(status.noEmailCount||0)+' relevant but no email found, '+(status.companiesDiscovered?status.companiesDiscovered.length:0)+' companies discovered)');
+                // Real gap found via user report: roundLog was tracked on
+                // the backend but never actually surfaced in the visible
+                // diagnostic text — a user could never see the per-round
+                // breakdown without digging into a browser console. Now
+                // printed directly, one line per round, so it's visible
+                // and copyable the same way every other diagnostic line is.
+                if(status.roundLog && status.roundLog.length){
+                  var roundSummary = status.roundLog.map(function(r){
+                    return 'R'+r.round+(r.companyRound?'(company)':'')+':'+r.newCandidates;
+                  }).join(' | ');
+                  appendDiagLine('Deep discovery rounds: '+roundSummary);
+                }
                 if(renderJobs.lastOk !== undefined) renderJobs(renderJobs.lastOk, renderJobs.lastSrcNames);
                 return;
               }
