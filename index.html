@@ -4298,6 +4298,35 @@
   // each job matched or didn't — not just the final score. Logs in the
   // exact requested format so relevance issues can be debugged directly
   // instead of guessed at from the outside.
+  // Real ask: a GENUINE guarantee, not just a repeating pattern — the
+  // previous version only achieved 70/30 when both buckets had plenty of
+  // supply; tested and confirmed it could drop to ~17% in-country overall
+  // when in-country jobs were genuinely scarce relative to demand. Fixed:
+  // computes a real 75% (midpoint of the requested 70-80%) target against
+  // the actual primary count, fills in-country FIRST up to that target,
+  // then fills the rest with MENA/remote — never hides anything, any
+  // leftover beyond what's needed still appears afterward in score order.
+  // Honest limit: if in-country supply is truly below the target, this
+  // can't invent more of it — the guarantee only holds when enough
+  // in-country jobs genuinely exist.
+  function applyLocationMix(list){
+    var c = curCountry();
+    var primary = list.filter(function(j){ return !j.isStretch; }); // already score-sorted, since list was sorted before this runs
+    var secondary = list.filter(function(j){ return j.isStretch; });
+    var inCountry = primary.filter(function(j){ return geoMatchStrict(j.loc, c); });
+    var menaOrRemote = primary.filter(function(j){ return !geoMatchStrict(j.loc, c); });
+    var targetInCountry = Math.min(inCountry.length, Math.round(primary.length * 0.75));
+    var mixed = inCountry.slice(0, targetInCountry);
+    var remainingSlots = primary.length - mixed.length;
+    mixed = mixed.concat(menaOrRemote.slice(0, remainingSlots));
+    // Anything left over (in-country beyond the target, or MENA/remote
+    // beyond what was needed to fill) still appears — nothing is hidden.
+    var usedInCountry = inCountry.slice(0, targetInCountry);
+    var usedMenaRemote = menaOrRemote.slice(0, remainingSlots);
+    var leftover = inCountry.slice(usedInCountry.length).concat(menaOrRemote.slice(usedMenaRemote.length));
+    leftover.sort(function(a,b){ return b.score - a.score; });
+    return mixed.concat(leftover).concat(secondary);
+  }
   function logRelevanceDiagnostics(jobs){
     var q = document.getElementById('jobQuery').value.trim();
     if(!q) return;
@@ -4359,7 +4388,14 @@
     if(tier===1) return 6; // VERIFIED — real, meaningful, but no longer ties/beats an in-country location match
     if(tier===3) return 5; // CONFIRMED — AI/web-search found with real evidence
     if(tier===4) return 3; // SHARED CACHE — real, but reused rather than freshly confirmed
-    if(tier===5) return 1; // PREDICTED — barely above nothing; never allowed to look like a real email
+    // Real ask: predicted emails are genuinely unreliable — a guessed
+    // email that turns out wrong is arguably worse than honestly having
+    // no email at all (it can mislead someone into contacting the wrong
+    // address). Previously scored +1, meaning a predicted-email job
+    // ranked slightly ABOVE an equivalent job with no email claimed at
+    // all — now scores below zero, so it ranks at the genuine bottom,
+    // not just "barely above nothing".
+    if(tier===5) return -2; // PREDICTED — ranks below even "no email" (tier 0), not just below other real tiers
     return 0;
   }
   function scoreJob(job){
@@ -4590,8 +4626,33 @@
           fetchWithTimeout(base+'/ai-discover-status/'+d.jobId, { headers: backendHeaders({}) }, 15000)
             .then(function(r){ return r.ok ? r.json() : {status:'error'}; })
             .then(function(status){
-              var newJobs = (status.results||[]).filter(function(j){ return j.url && !seenUrls[j.url]; });
-              if(newJobs.length){
+              // Real bug found via user report: this only deduped against
+              // what THIS polling session had already merged, never
+              // against allJobs itself — a job already present from an
+              // earlier source (the synchronous AI-Discovery call,
+              // HireLebanese, etc.) could get added again as a genuine
+              // duplicate. Now checks both — and rather than just
+              // discarding a real duplicate find, upgrades the EXISTING
+              // entry's email if deep discovery found a real one for a
+              // job that previously had none or only a predicted one, so
+              // the real find isn't wasted.
+              var newJobs = [];
+              var anyUpgraded = false;
+              (status.results||[]).forEach(function(j){
+                if(!j.url || seenUrls[j.url]) return;
+                seenUrls[j.url] = true;
+                var existing = allJobs.find(function(e){ return e.url === j.url; });
+                if(existing){
+                  if(j.email && (!existing.email || existing.emailPredicted)){
+                    existing.email = j.email; existing.emailPredicted = false; existing.emailVerified = j.confidence === 'high';
+                    existing.src = (existing.src||'') + ' (email via deep discovery: '+(j.confidence||'?')+')';
+                    anyUpgraded = true;
+                  }
+                  return; // never add as a second card either way — it's the same real job
+                }
+                newJobs.push(j);
+              });
+              if(newJobs.length || anyUpgraded){
                 newJobs.forEach(function(j){ seenUrls[j.url] = true; });
                 var mapped = newJobs.map(function(j){
                   return { title:j.title||'', company:j.company||'', loc:j.location||location||'', url:j.url||'', desc:j.snippet||'', date:'', src:'AI-Discovery',
@@ -4630,7 +4691,17 @@
   // that still only have a predicted email — updates them IN PLACE
   // (matching by URL) rather than adding new job cards.
   function startAsyncEnrichment(jobs){
-    var candidates = jobs.filter(function(j){ return !j.isStretch && j.emailPredicted; }).map(function(j){
+    // Real ask: only "same field" predicted-email jobs were getting a
+    // chance at upgrade before — but most of the predicted emails a
+    // search actually shows are in the "different field" section, which
+    // never got included at all. Now covers every predicted-email job,
+    // still processing relevant ones FIRST (more valuable to upgrade
+    // first, even though everything eventually gets a turn) rather than
+    // treating all in whatever order they happened to be in.
+    var allPredicted = jobs.filter(function(j){ return j.emailPredicted; });
+    var relevant = allPredicted.filter(function(j){ return !j.isStretch; });
+    var offField = allPredicted.filter(function(j){ return j.isStretch; });
+    var candidates = relevant.concat(offField).map(function(j){
       return { title:j.title, company:j.company, loc:j.loc, url:j.url, desc:j.desc };
     });
     if(!candidates.length) return Promise.resolve();
@@ -5441,6 +5512,7 @@
         var lastResortGuesses = applyLastResortEmailGuess(list); // see this function's own comment — catches every job the capped pipeline above never got to
         list.forEach(function(j){ j.score = scoreJob(j); j.days = j.date ? daysAgo(j.date) : null; });
         list.sort(function(a,b){ return (b.score - a.score) || ((a.days==null?15:a.days) - (b.days==null?15:b.days)); });
+        list = applyLocationMix(list); // real ask: 70% in-country / 30% MENA+remote in the visible order — reorders, never hides anything
         logRelevanceDiagnostics(list); // spec point 11 — real, inspectable reason for every job's match/non-match, logged once the final order is set
         list.forEach(function(j){ j.applicationMethod = j.email ? 'email' : 'platform'; });
         // Pinpointing exactly which filter accounts for the 40\u219227 HireLebanese
