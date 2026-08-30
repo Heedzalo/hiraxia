@@ -4676,6 +4676,19 @@
                 // get merged in later (e.g. the city-level deep scan) — safe
                 // and cheap to re-score already-scored jobs too.
                 allJobs.forEach(function(j){ j.score = scoreJob(j); j.days = j.date ? daysAgo(j.date) : null; });
+                // Real bug found via user report: re-scoring alone wasn't
+                // enough — renderJobs() finds the "different field" divider
+                // by the FIRST isStretch index in the array, which only
+                // works if relevant jobs are actually sorted ahead of
+                // stretch ones. A newly-merged, genuinely relevant job was
+                // just appended via .concat(), landing physically after
+                // old stretch jobs even though it correctly scored as
+                // relevant — showing a real, high percentage while visually
+                // sitting under the "different field" divider. Re-sorting
+                // and re-applying the same location-mix logic the main
+                // search flow uses fixes this at the root.
+                allJobs.sort(function(a,b){ return (b.score - a.score) || ((a.days==null?15:a.days) - (b.days==null?15:b.days)); });
+                allJobs = applyLocationMix(allJobs);
                 appendDiagLine('Deep discovery: '+status.foundCount+'/'+status.targetCount+' jobs with real emails found so far');
                 if(renderJobs.lastOk !== undefined) renderJobs(renderJobs.lastOk, renderJobs.lastSrcNames);
               }
@@ -4741,6 +4754,12 @@
                   }
                 });
                 allJobs.forEach(function(j){ j.score = scoreJob(j); }); // re-score so newly-real emails correctly outrank remaining predicted ones
+                // Same fix as deep discovery's merge point — re-sorting
+                // after a score change ensures an upgraded job's new,
+                // higher rank is actually reflected in its position, not
+                // just its stored score.
+                allJobs.sort(function(a,b){ return (b.score - a.score) || ((a.days==null?15:a.days) - (b.days==null?15:b.days)); });
+                allJobs = applyLocationMix(allJobs);
                 appendDiagLine('Predicted\u2192real email upgrade: '+status.foundCount+'/'+status.targetCount+' upgraded to real emails so far');
                 if(renderJobs.lastOk !== undefined) renderJobs(renderJobs.lastOk, renderJobs.lastSrcNames);
               }
