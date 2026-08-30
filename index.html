@@ -4577,18 +4577,18 @@
   // (AI_DISCOVERY_ENABLED) since it has a different cost profile than
   // email enrichment. Returns instantly at zero cost when the backend
   // flag is off, same graceful-disable pattern as every other AI route.
-  function sourceAiDiscoveredJobs(q, location){
+  function sourceAiDiscoveredJobs(q, location, broaderLocation){
     var base = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
     return fetchWithTimeout(base+'/ai-discover-jobs', {
       method:'POST', headers: backendHeaders({'Content-Type':'application/json'}),
-      body: JSON.stringify({ query: q||'', location: location||'', searchId: 'search_'+Date.now() })
-    }, 200000) // raised from 90s — the search/fetch budget behind this call was raised significantly (4\u219210 searches, 6\u219215 fetches), needs real buffer to match
+      body: JSON.stringify({ query: q||'', location: location||'', broaderLocation: broaderLocation||'', searchId: 'search_'+Date.now() })
+    }, 200000) // raised from 90s — the search/fetch budget behind this call was raised significantly (4\u219210 searches, 6\u219215 fetches), needs real buffer to match; a backend retry-on-zero can now also run within this same window
       .then(function(r){ return r.ok ? r.json() : {enabled:false, jobs:[]}; })
       .then(function(d){
         if(!d.enabled){ appendDiagLine('AI-Discovery: disabled (AI_DISCOVERY_ENABLED not set)'); return []; }
         var queriesNote = (d.queriesUsed && d.queriesUsed.length) ? ' — searched: ['+d.queriesUsed.join(' | ')+']' : '';
         if(!d.jobs || !d.jobs.length){ appendDiagLine('AI-Discovery: 0 jobs ('+(d.reason||'unknown reason')+')'+queriesNote); return []; }
-        appendDiagLine('AI-Discovery: found '+d.jobs.length+' job(s)'+queriesNote);
+        appendDiagLine('AI-Discovery: found '+d.jobs.length+' job(s)'+(d.reason?' ('+d.reason+')':'')+queriesNote);
         return (d.jobs||[]).map(function(j){
           return { title:j.title||'', company:j.company||'', loc:j.location||location||'', url:j.url||'', desc:j.snippet||'', date:'', src:'AI-Discovery' };
         });
@@ -4609,11 +4609,11 @@
   // runAiResearch, just running for potentially much longer.
   var ASYNC_DISCOVERY_POLL_MS = 4000;
   var ASYNC_DISCOVERY_MAX_POLLS = 130; // ~8-9 minutes, matching the backend's own wall-clock ceiling with a little slack
-  function startAsyncDiscovery(q, location, targetCount){
+  function startAsyncDiscovery(q, location, targetCount, cities){
     var base = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
     return fetchWithTimeout(base+'/ai-discover-jobs-async', {
       method:'POST', headers: backendHeaders({'Content-Type':'application/json'}),
-      body: JSON.stringify({ query: q||'', location: location||'', targetCount: targetCount||25 })
+      body: JSON.stringify({ query: q||'', location: location||'', targetCount: targetCount||25, cities: cities||[] })
     }, 15000) // this call itself is fast — it only starts the job and returns a jobId, the real work happens in the background
       .then(function(r){ return r.ok ? r.json() : {enabled:false}; })
       .then(function(d){
@@ -4881,7 +4881,7 @@
       .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status+' (check the token — boards.greenhouse.io/'+token+' should exist)'); return r.json(); })
       .then(function(d){
         var jobs = (d.jobs||[]);
-        return jobs.slice(0,20).map(function(j){
+        var mapped = jobs.slice(0,20).map(function(j){
           return {
             title: j.title||'', company: token.charAt(0).toUpperCase()+token.slice(1),
             loc: (j.location && j.location.name) || '—',
@@ -4890,6 +4890,15 @@
             src:'Greenhouse\u00b7'+token
           };
         });
+        // Real bug found via user report: q was accepted as a parameter
+        // but never actually used — every search pulled up to 20 jobs
+        // from EVERY saved company's ENTIRE board, regardless of
+        // relevance, flooding "different field" with the same handful of
+        // company names (Careem, GitLab, BeyondTrust...) on literally
+        // every search. Reuses the SAME relevance logic the rest of the
+        // app already uses, rather than including everything unfiltered
+        // and relying only on downstream scoring to bury it.
+        return mapped.filter(function(j){ return relevanceScore(j).rel > 0; });
       });
   }
   // Workable: same category as Greenhouse/Lever — public, keyless, per-company job board,
@@ -5350,7 +5359,15 @@
       {n:'JobsPipe', p:new Promise(function(res){ setTimeout(function(){ res(sourceJobsPipe(q, (c.v==='sa2'?'sa':(c.v==='remote'?'':c.v)))); }, 900); }).then(function(p){ return p; })},
       (c.v==='lb' ? {n:'HireLebanese', p:new Promise(function(res){ setTimeout(function(){ res(sourceHireLebanese(q)); }, 1200); }).then(function(p){ return p; })} : null),
       {n:'WebSearch', p:new Promise(function(res){ setTimeout(function(){ res(sourceWebSearchJobs(q, curCity() || c.gj || '')); }, 1500); }).then(function(p){ return p; })},
-      {n:'AI-Discovery', p:new Promise(function(res){ setTimeout(function(){ res(sourceAiDiscoveredJobs(q, curCity() || c.gj || '')); }, 1800); }).then(function(p){ return p; })}
+      {n:'AI-Discovery', p:new Promise(function(res){ setTimeout(function(){
+        // Real ask: "let it search wider for the same job" — if a specific
+        // city is selected, the backend retries with the country-level
+        // location if the city-level search finds nothing, rather than
+        // just declaring zero results from one narrow attempt.
+        var cityLoc = curCity();
+        var countryLoc = c.gj || '';
+        res(sourceAiDiscoveredJobs(q, cityLoc || countryLoc || '', cityLoc ? countryLoc : ''));
+      }, 1800); }).then(function(p){ return p; })}
     ];
     // Bounded query-expansion pass — see getSynonymForQuery's own comment.
     // Only the two highest-volume sources, only when a real match is found,
@@ -5628,7 +5645,10 @@
           // screen immediately, exactly the real-time visibility this
           // specific long-running task needs). Harmless, instant no-op
           // when AI_DISCOVERY_ENABLED is off on the backend.
-          startAsyncDiscovery(q, curCity() || c.gj || '', 25);
+          // Real ask: give AI-Discovery the same multi-city breadth
+          // deepScan already has (CITY_FANOUT), rather than only ever
+          // searching whatever single location is currently selected.
+          startAsyncDiscovery(q, curCity() || c.gj || '', 25, CITY_FANOUT[c.v] || []);
           // Real ask: give the SAME safe async treatment to upgrading
           // predicted emails on EXISTING relevant jobs, not just finding
           // NEW ones — genuinely independent, no timeout ceiling, runs
