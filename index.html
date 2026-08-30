@@ -4720,7 +4720,7 @@
       .then(function(r){ return r.ok ? r.json() : {enabled:false}; })
       .then(function(d){
         if(!d.enabled || !d.jobId){ appendDiagLine('Predicted\u2192real email upgrade: disabled or failed to start'); return; }
-        appendDiagLine('Predicted\u2192real email upgrade: started ('+candidates.length+' predicted-email jobs in your results, this can take several minutes in the background)');
+        appendDiagLine('Predicted\u2192real email upgrade: started ('+candidates.length+' predicted-email jobs in your results \u2014 '+relevant.length+' relevant + '+offField.length+' off-field capped, this can take several minutes in the background)');
         var appliedUrls = {};
         var poll = 0;
         function checkStatus(){
