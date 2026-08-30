@@ -2586,7 +2586,9 @@
     },
     hr: {
       core:['hr assistant','hr coordinator','hr specialist','hr generalist','hr manager','human resources manager',
-        'recruit','talent acquisition'],
+        'recruit','talent acquisition','hr officer','human resources officer','head of hr','hr director',
+        'human resources coordinator','human resources assistant','human resources specialist','human resources generalist',
+        'human resources director','human resources'],
       adjacent:['people ops','people operations','hr business partner','hrbp','chro','compensation','benefits']
     },
     ops: {
@@ -2728,6 +2730,43 @@
   // name — much more conservative, but doesn't break term matching.
   var SENIORITY_WORDS = /\b(intern|entry level|entry|junior|jr|mid level|senior|sr|principal)\b/gi;
   function stripSeniority(title){ return title.replace(SENIORITY_WORDS, ' ').replace(/\s+/g,' ').trim(); }
+  // Real ask: general typo tolerance across EVERY family, not another
+  // one-off patch for whichever specific misspelling gets reported next
+  // ("Humar Resources Manager" was the reported case, but the fix needs
+  // to hold for any future one-letter-off title in any family). Standard
+  // Levenshtein edit distance, applied word-by-word so a single typo in
+  // a multi-word term doesn't sink the whole match.
+  function levenshtein(a, b){
+    if(a === b) return 0;
+    if(!a.length) return b.length;
+    if(!b.length) return a.length;
+    var prev = [];
+    for(var j=0; j<=b.length; j++) prev[j] = j;
+    for(var i=1; i<=a.length; i++){
+      var cur = [i];
+      for(var j2=1; j2<=b.length; j2++){
+        cur[j2] = Math.min(prev[j2]+1, cur[j2-1]+1, prev[j2-1]+(a[i-1]===b[j2-1]?0:1));
+      }
+      prev = cur;
+    }
+    return prev[b.length];
+  }
+  // A multi-word term (e.g. "human resources manager") fuzzy-matches a
+  // title if EVERY word in the term has a close match somewhere in the
+  // title's words — exact match required for short words (3 chars or
+  // fewer, e.g. "hr") to avoid nonsense matches, edit-distance <=1
+  // allowed for longer words (catches exactly one typo, not a
+  // fundamentally different word).
+  function fuzzyTermInText(term, text){
+    var termWords = term.split(' ');
+    var textWords = text.split(/\s+/);
+    return termWords.every(function(tw){
+      return textWords.some(function(xw){
+        if(tw.length<=3 || xw.length<=3) return tw===xw;
+        return levenshtein(tw, xw) <= 1;
+      });
+    });
+  }
 
   // legitimate employers never charge job seekers to apply. Any listing showing
   // signs of requiring payment gets removed entirely, not just labeled — this
@@ -4256,6 +4295,19 @@
         if(f.core.some(function(t){ return text.indexOf(t)>-1; })){ family = fam; tier = 'core'; }
         else if(f.adjacent.some(function(t){ return text.indexOf(t)>-1; })){ family = fam; tier = 'adjacent'; }
       });
+      // Real ask: general typo tolerance, not a one-off HR patch — only
+      // tried when the exact-substring pass above found nothing at all,
+      // so the common case (title spelled correctly) stays as cheap as
+      // it always was. Catches one-letter-off titles like "Humar
+      // Resources Manager" in ANY family, not just the one reported.
+      if(!family){
+        Object.keys(ROLE_TAXONOMY).forEach(function(fam){
+          if(family) return;
+          var f = ROLE_TAXONOMY[fam];
+          if(f.core.some(function(t){ return fuzzyTermInText(t, text); })){ family = fam; tier = 'core'; }
+          else if(f.adjacent.some(function(t){ return fuzzyTermInText(t, text); })){ family = fam; tier = 'adjacent'; }
+        });
+      }
       return { family: family, tier: tier };
     }
     var queryMatch = findFamilyAndTier(qNorm);
@@ -4614,7 +4666,7 @@
     return fetchWithTimeout(base+'/ai-discover-jobs-async', {
       method:'POST', headers: backendHeaders({'Content-Type':'application/json'}),
       body: JSON.stringify({ query: q||'', location: location||'', targetCount: targetCount||25, cities: cities||[] })
-    }, 15000) // this call itself is fast — it only starts the job and returns a jobId, the real work happens in the background
+    }, 45000) // real fix for a real bug: raised from 15s — this call itself is fast under normal conditions, but if the backend is on a plan that sleeps after inactivity (e.g. Render free tier), the FIRST request after idle can take 30-50s+ to wake it up, well past the old 15s timeout — causing exactly the "Failed to fetch" seen in testing
       .then(function(r){ return r.ok ? r.json() : {enabled:false}; })
       .then(function(d){
         if(!d.enabled || !d.jobId){ appendDiagLine('Deep discovery: disabled or failed to start'); return; }
@@ -4712,16 +4764,16 @@
   // that still only have a predicted email — updates them IN PLACE
   // (matching by URL) rather than adding new job cards.
   function startAsyncEnrichment(jobs){
-    // Real ask: process ALL relevant (same-field) predicted-email jobs —
-    // no cap here, these are the ones that actually matter to the
-    // search. Off-field jobs get a real, deliberately SMALL cap instead
-    // of unlimited inclusion — genuinely less attention on jobs the
-    // search wasn't really about, more on the ones it was.
-    var OFF_FIELD_ENRICHMENT_CAP = 10;
-    var allPredicted = jobs.filter(function(j){ return j.emailPredicted; });
-    var relevant = allPredicted.filter(function(j){ return !j.isStretch; });
-    var offField = allPredicted.filter(function(j){ return j.isStretch; }).slice(0, OFF_FIELD_ENRICHMENT_CAP);
-    var candidates = relevant.concat(offField).map(function(j){
+    // Real ask: given the real cost data ($0.96 in one day, well above a
+    // sustainable pace), off-field jobs no longer get ANY AI email
+    // enrichment at all — only same-field jobs matter enough to spend on.
+    // Within same-field, in-country jobs go first — the ones most likely
+    // to actually matter to the person searching.
+    var c = curCountry();
+    var relevant = jobs.filter(function(j){ return j.emailPredicted && !j.isStretch; });
+    var inCountry = relevant.filter(function(j){ return geoMatchStrict(j.loc, c); });
+    var restRelevant = relevant.filter(function(j){ return !geoMatchStrict(j.loc, c); });
+    var candidates = inCountry.concat(restRelevant).map(function(j){
       return { title:j.title, company:j.company, loc:j.loc, url:j.url, desc:j.desc };
     });
     if(!candidates.length) return Promise.resolve();
@@ -4729,11 +4781,11 @@
     return fetchWithTimeout(base+'/ai-enrich-jobs-async', {
       method:'POST', headers: backendHeaders({'Content-Type':'application/json'}),
       body: JSON.stringify({ jobs: candidates, targetCount: candidates.length })
-    }, 15000) // this call itself is fast — only starts the job and returns a jobId
+    }, 45000) // same real fix as the discovery-start call above — real headroom for a cold-start backend, not just the fast-path assumption
       .then(function(r){ return r.ok ? r.json() : {enabled:false}; })
       .then(function(d){
         if(!d.enabled || !d.jobId){ appendDiagLine('Predicted\u2192real email upgrade: disabled or failed to start'); return; }
-        appendDiagLine('Predicted\u2192real email upgrade: started ('+candidates.length+' predicted-email jobs in your results \u2014 '+relevant.length+' relevant + '+offField.length+' off-field capped, this can take several minutes in the background)');
+        appendDiagLine('Predicted\u2192real email upgrade: started ('+candidates.length+' same-field predicted-email jobs \u2014 '+inCountry.length+' in-country first, '+restRelevant.length+' MENA/remote after \u2014 off-field jobs skipped entirely, this can take several minutes in the background)');
         var appliedUrls = {};
         var poll = 0;
         function checkStatus(){
