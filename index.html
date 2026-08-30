@@ -2694,8 +2694,14 @@
     trades: {
       core:['electrician','electrical technician','plumber','hvac technician','hvac',
         'carpenter','welder','mechanic','maintenance technician','maintenance electrician'],
+      // Real gap found via user report: "Electrical Jobs (Aug 2026)" and
+      // similar generic listing-page titles use "electrical" (adjective)
+      // rather than "electrician" (the actual job noun), and don't
+      // include a specific role word like "technician" — missed both the
+      // exact match AND the fuzzy-typo fallback (different words
+      // entirely, not a one-letter typo). Added as its own adjacent term.
       adjacent:['handyman','general maintenance','facilities technician','building technician',
-        'refrigeration technician','ac technician','air conditioning technician','pipefitter','fitter']
+        'refrigeration technician','ac technician','air conditioning technician','pipefitter','fitter','electrical']
     },
     // Real gap found via user report: "Driver" and "Delivery Rider" were
     // scoring as completely unrelated — no transportation/driving family
@@ -4377,7 +4383,15 @@
     var usedMenaRemote = menaOrRemote.slice(0, remainingSlots);
     var leftover = inCountry.slice(usedInCountry.length).concat(menaOrRemote.slice(usedMenaRemote.length));
     leftover.sort(function(a,b){ return b.score - a.score; });
-    return mixed.concat(leftover).concat(secondary);
+    // Real ask: within "different field" (genuinely off-topic jobs),
+    // MENA-region ones should surface before fully unrelated-region ones
+    // — reuses the same menaMatch already used by the filter tabs, so
+    // "MENA" means the same thing here as it does everywhere else in the
+    // app. Score-order is preserved within each group; this only
+    // reorders which group comes first, never hides anything.
+    var secondaryMena = secondary.filter(function(j){ return menaMatch(j.loc) || geoMatchStrict(j.loc, c); });
+    var secondaryOther = secondary.filter(function(j){ return !(menaMatch(j.loc) || geoMatchStrict(j.loc, c)); });
+    return mixed.concat(leftover).concat(secondaryMena).concat(secondaryOther);
   }
   function logRelevanceDiagnostics(jobs){
     var q = document.getElementById('jobQuery').value.trim();
@@ -4634,7 +4648,7 @@
     return fetchWithTimeout(base+'/ai-discover-jobs', {
       method:'POST', headers: backendHeaders({'Content-Type':'application/json'}),
       body: JSON.stringify({ query: q||'', location: location||'', broaderLocation: broaderLocation||'', searchId: 'search_'+Date.now() })
-    }, 200000) // raised from 90s — the search/fetch budget behind this call was raised significantly (4\u219210 searches, 6\u219215 fetches), needs real buffer to match; a backend retry-on-zero can now also run within this same window
+    }, 300000) // raised again from 200s — the retry-on-zero fix can now run TWO sequential AI attempts inside this one request, and if that coincides with a cold-start backend, worst-case time stacks higher than the old 200s covered; still observed failing at 200s in real testing
       .then(function(r){ return r.ok ? r.json() : {enabled:false, jobs:[]}; })
       .then(function(d){
         if(!d.enabled){ appendDiagLine('AI-Discovery: disabled (AI_DISCOVERY_ENABLED not set)'); return []; }
@@ -4745,7 +4759,7 @@
                 if(renderJobs.lastOk !== undefined) renderJobs(renderJobs.lastOk, renderJobs.lastSrcNames);
               }
               if(status.status === 'complete' || status.status === 'failed'){
-                appendDiagLine('Deep discovery: '+status.status+(status.reason?' ('+status.reason+')':'')+' — '+status.foundCount+' total jobs with real emails');
+                appendDiagLine('Deep discovery: '+status.status+(status.reason?' ('+status.reason+')':'')+' — '+status.foundCount+' real-email jobs (from '+(status.rawCandidates||0)+' raw candidates, '+(status.noEmailCount||0)+' relevant but no email found, '+(status.companiesDiscovered?status.companiesDiscovered.length:0)+' companies discovered)');
                 if(renderJobs.lastOk !== undefined) renderJobs(renderJobs.lastOk, renderJobs.lastSrcNames);
                 return;
               }
