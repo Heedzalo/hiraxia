@@ -2205,6 +2205,25 @@
   }
   function curCountry(){ return countryMap[sel.value] || countryMap.remote; }
   function isRemoteish(loc){ return /remote|worldwide|anywhere|emea|mena|global|international/i.test(String(loc||'')); }
+  // Real bug found via user report (Lebanon bartender search): GoogleJobs
+  // returns plenty of US on-site service jobs with loc "Anywhere" — e.g.
+  // "Bartender - Lead, Live! by Loews - St. Louis, MO · Anywhere" and
+  // "[Work From Home] BARTENDER ... in Herndon, VA". isRemoteish() then
+  // handed them the +2 "remote is fine anywhere" geo bonus instead of the
+  // -5 a genuinely out-of-country job gets, so US bartender jobs
+  // outranked real Beirut ones (81% vs 77%) in a Lebanon search.
+  // A bartender/waiter/driver/nurse job is physically impossible to do
+  // remotely — so "remote" on one of these is a mislabel from the source,
+  // not a real remote opening. Detected by role family rather than by
+  // trying to parse a city out of free-text, which is far more brittle.
+  var PHYSICAL_PRESENCE_ROLE = /\b(bartender|barmaid|barista|waiter|waitress|server|busser|host(?:ess)?|chef|cook|kitchen|dishwasher|sous|line cook|baker|butcher|driver|courier|delivery|rider|warehouse|forklift|picker|packer|cleaner|housekeep|janitor|custodian|security guard|bouncer|valet|nurse|nursing|caregiver|midwife|phlebotom|dental|surgeon|physician|electrician|plumber|hvac|welder|mechanic|technician on-?site|carpenter|mason|painter|landscap|construction|labourer|laborer|cashier|salesperson|shop assistant|store associate|retail associate|stocker|receptionist|concierge|bellman|porter|room attendant|lifeguard|barber|hairdress|stylist|massage|esthetician|manicur)\b/i;
+  // True only when a job CLAIMS to be remote but its role physically
+  // can't be — i.e. the "remote" label should not be trusted for geo
+  // scoring or for the Remote filter view.
+  function isFakeRemote(job){
+    if(!job || !isRemoteish(job.loc)) return false;
+    return PHYSICAL_PRESENCE_ROLE.test(String(job.title||''));
+  }
   function isoOf(c){ return c.v==='sa2' ? 'sa' : c.v; }
   // regional neighbors: when a country is thin, widen the SAME role to these first
   var NEIGHBORS = {
@@ -2272,6 +2291,22 @@
   var US_NAMESAKE_RE = /,\s*(A[LKZR]|C[AOT]|DC|DE|FL|GA|HI|I[ADLN]|K[SY]|LA|M[ADEINOST]|N[CDEHJMVY]|O[HKR]|PA|RI|S[CD]|T[NX]|UT|V[AT]|W[AIVY])\b|usa|united states|tennessee|ohio|pennsylvan|illinois|texas|minnesota|indiana|kentucky|oregon|virginia|missouri|new hampshire|wisconsin|kansas|nebraska|oklahoma|connecticut|new york/i;
   var US_CODE_RE = /,\s*u\.?s\.?a?\.?\s*$/i;
   function usNamesake(loc){ var L=String(loc||''); return US_NAMESAKE_RE.test(L) || US_CODE_RE.test(L); }
+  // Real bug found via user report: "Job Fair in Lebanon, IN!" and
+  // "Driver - LaRosa's - Lebanon" (LaRosa's is a Cincinnati chain — that
+  // is Lebanon, OHIO) both came through tagged loc "LB" and matched as
+  // Lebanon-the-country. The existing guard above only ever inspected
+  // the LOCATION string, but GoogleJobs had already flattened these to a
+  // bare "LB" — the only surviving evidence of the real US location was
+  // in the TITLE, where nothing was looking. Checks both now.
+  // Also catches the "City, ST" shape anywhere in a title, not just at
+  // the end, since job titles routinely append the location mid-string.
+  var US_NAMESAKE_TITLE_RE = /\b(lebanon|beirut|tripoli|tyre|sidon)\s*,\s*(A[LKZR]|C[AOT]|DC|DE|FL|GA|HI|I[ADLN]|K[SY]|LA|M[ADEINOST]|N[CDEHJMVY]|O[HKR]|PA|RI|S[CD]|T[NX]|UT|V[AT]|W[AIVY])\b/i;
+  function jobIsUsNamesake(job){
+    if(!job) return false;
+    if(usNamesake(job.loc)) return true;
+    var t = String(job.title||'');
+    return US_NAMESAKE_TITLE_RE.test(t) || US_NAMESAKE_RE.test(t);
+  }
   function geoMatchStrict(loc, c){
     return geoMatch(loc, c) && !(c.mena && usNamesake(loc));
   }
@@ -2805,6 +2840,26 @@
   // underscores to spaces before testing catches this and any future
   // hyphenated variant of the same pattern.
   var GENERIC_COMPANY_NAME = /^(jobs? (for|in|at)|careers? (in|at)|(job )?opportunities( in| at)?|hiring (in|at)|vacanc(y|ies)( in| for)?)\b/i;
+  // Real bug found via user report (Lebanon bartender search): "remote
+  // zest jobs" appeared as the "company" for TEN completely unrelated
+  // bartender listings, and "vacancy global pro" / "Careers and Jobs in
+  // Lebanon" for others — all aggregator/listing-site labels, none of
+  // them a real employer, but none caught by the prefix-anchored regex
+  // above (which only matches labels STARTING with "jobs in/for/at").
+  // This catches the same category by suffix too: a name ENDING in
+  // "jobs"/"careers"/"vacancies"/"hiring", or containing an explicit
+  // job-board giveaway, is a listing label rather than an employer.
+  // Deliberately requires a multi-word name — a real single-word
+  // company legitimately called "Careers" or "Jobs" is implausible,
+  // but this keeps the rule from ever misfiring on a short real name.
+  var GENERIC_COMPANY_SUFFIX = /\s(jobs?|careers?|vacanc(?:y|ies)|hiring|recruitment|listings?)$/i;
+  // Third shape, from a real case in the HR search: "Careers and Jobs in
+  // Lebanon" — the giveaway phrase sits in the MIDDLE, so neither the
+  // prefix nor the suffix rule catches it. Deliberately asymmetric: the
+  // one known false positive here ("Center for Jobs", a real org) costs
+  // only a missed email propagation, while a miss in the other direction
+  // sends real applications to the wrong employer entirely.
+  var GENERIC_COMPANY_CONTAINS = /\b(jobs?|careers?|vacanc(?:y|ies)|openings?|hiring)\s+(for|in|at)\s+\S/i;
   // Real, confirmed case from repeated evidence across this whole
   // session: "We" has shown up as the "company" for many completely
   // unrelated real jobs (driver, accountant, procurement...) — the
@@ -2816,7 +2871,10 @@
   var KNOWN_GENERIC_COMPANY_NAMES = ['we'];
   function isGenericCompanyName(key){
     var normalized = String(key||'').replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim();
-    return GENERIC_COMPANY_NAME.test(normalized) || KNOWN_GENERIC_COMPANY_NAMES.indexOf(normalized) > -1;
+    return GENERIC_COMPANY_NAME.test(normalized)
+      || GENERIC_COMPANY_SUFFIX.test(normalized)
+      || GENERIC_COMPANY_CONTAINS.test(normalized)
+      || KNOWN_GENERIC_COMPANY_NAMES.indexOf(normalized) > -1;
   }
   // ^ real bug found tonight: a vision model reading a screenshot returned
   // "name@domain.com" as if it were a real found email — almost certainly
@@ -3072,8 +3130,12 @@
   window.__screenshotDebug = '';
   function scanViaScreenshot(jobs){
     var groqKey = lsGet('hiraxia_groqKey');
-    var candidates = jobs.filter(function(j){
-      if(j.email || looksLikeRealATS(j) || !j.url) return false;
+    var candidates = orderForEmailDiscovery(jobs.filter(function(j){
+      // ATS skip removed for consistency with every other stage; the
+      // job-board skip below genuinely stays (confirmed by real testing:
+      // aggregator pages never show a contact email, so screenshotting
+      // them is a guaranteed-wasted call).
+      if(j.email || !j.url) return false;
       // confirmed via real testing tonight: LinkedIn job pages never show a contact
       // email — screenshotting them is a guaranteed-wasted call every time. Now uses
       // the FULL job-board list, not just LinkedIn, after remotive.com showed the
@@ -3083,7 +3145,7 @@
       var cached = domain && emailCacheGet(domain);
       if(cached){ j.email = cached.email; j.src = (j.src||'') + ' (email via learned cache)'; return false; }
       return true;
-    }).slice(0, 10); // raised to 10 per your request (found the real Business Lobby email via the
+    })).slice(0, 10); // raised to 10 per your request (found the real Business Lobby email via the
     // single-URL test) — this cap protects against the exact rate-limit storm that
     // was causing every real search to come back with "found 0": firing dozens of
     // requests simultaneously trips Thum.io's free-tier limit almost instantly.
@@ -3136,9 +3198,11 @@
     if(!key){ window.__anymailDebug = ''; return Promise.resolve(jobs); }
     if(anymailOutOfCredits){ window.__anymailDebug = 'Anymail Finder: skipped (out of credits this session)'; return Promise.resolve(jobs); }
     var GENERIC_COMPANY_NAMES = /^(private company|confidential|client of|undisclosed)/i;
-    var candidates = jobs.filter(function(j){
-      return !j.email && !looksLikeRealATS(j) && j.company && !GENERIC_COMPANY_NAMES.test(j.company);
-    }).slice(0, 6); // no rate limit on their end, but keep this sane per search
+    var candidates = orderForEmailDiscovery(jobs.filter(function(j){
+      // ATS skip removed here too, matching every other stage — an
+      // employer on Workday still has a real domain worth looking up.
+      return !j.email && j.company && !GENERIC_COMPANY_NAMES.test(j.company);
+    })).slice(0, 6); // no rate limit on their end, but keep this sane per search
     if(!candidates.length){
       window.__anymailDebug = 'Anymail Finder: 0 eligible jobs this search';
       return Promise.resolve(jobs);
@@ -3190,13 +3254,19 @@
   function extractEmailViaBackend(jobs){
     var proxy = lsGet('hiraxia_proxyUrl');
     if(!proxy) return Promise.resolve(jobs); // no backend yet — client-side fallbacks handle it
-    var candidates = jobs.filter(function(j){
-      if(j.email || looksLikeRealATS(j) || !j.url) return false;
+    var candidates = orderForEmailDiscovery(jobs.filter(function(j){
+      // Audit finding: this stage still carried the ATS skip and the
+      // "must have a URL" gate that were removed from the other stages —
+      // an inconsistency that silently excluded ATS-hosted and
+      // URL-less jobs from page scanning even though they're eligible
+      // everywhere else now. A page scan needs a URL to fetch, so that
+      // requirement genuinely stays; the ATS exclusion does not.
+      if(j.email || !j.url) return false;
       var domain = guessDomainFromUrl(j.url) || (function(){ try{ return new URL(j.url).hostname; }catch(e){ return null; } })();
       var cached = domain && emailCacheGet(domain);
       if(cached){ j.email = cached.email; j.src = (j.src||'') + ' (email via learned cache)'; return false; }
       return true;
-    }).slice(0, 15); // capped, matching other stages — scanning every single job's page isn't necessary
+    })).slice(0, 25); // raised 15->25 and now relevance-ordered, so the extra slots go to the customer's actual role
     if(!candidates.length) return Promise.resolve(jobs);
     var base = proxy.replace(/\/+$/,'');
     var found = 0, errors = 0;
@@ -3298,9 +3368,46 @@
     if(!clean || clean.length < 2) return null;
     return clean + '.com';
   }
+  // Per explicit product rule: PREDICT → RESEARCH → VERIFY → PROMOTE,
+  // never PREDICT → CALL IT REAL. This function no longer assigns
+  // j.email at all — a pattern guess is a research HYPOTHESIS, not a
+  // result. It writes j.emailHypotheses (a small candidate set) and
+  // j.predictedEmail (the single most likely one, for display as an
+  // explicit guess), leaving j.email null until real evidence promotes
+  // something into it. Everything downstream that gates on j.email
+  // therefore treats these as "no email yet" automatically — which is
+  // exactly right: they are unproven.
+  var EMAIL_HYPOTHESIS_PREFIXES = ['careers', 'hr', 'recruitment', 'jobs', 'talent', 'recruiting'];
+  function buildEmailHypotheses(domain){
+    if(!domain) return [];
+    return EMAIL_HYPOTHESIS_PREFIXES.map(function(p){ return p + '@' + domain; });
+  }
+  // Audit finding: every email-discovery stage (domain scan, Anymail,
+  // page scan, company-then-email) ordered its candidates by GEOGRAPHY
+  // only and never by relevance — so an off-field "different field"
+  // filler job could consume a capped email-research slot ahead of the
+  // exact role the customer searched for. Since the product metric is
+  // "relevant jobs WITH a usable email", that ordering was working
+  // against the goal. This is the shared ordering every stage now uses:
+  // relevant before off-field, in-country before elsewhere, then by
+  // relevance score and freshness. Ordering only — nothing is dropped
+  // here, so a stage with spare capacity still reaches everything.
+  function orderForEmailDiscovery(list){
+    var cO = curCountry();
+    return list.slice().sort(function(a, b){
+      var aS = a.isStretch ? 1 : 0, bS = b.isStretch ? 1 : 0;
+      if(aS !== bS) return aS - bS;                                  // relevant roles first, always
+      var aH = (geoMatchStrict(a.loc, cO) && !a.usNamesake) ? 0 : 1;
+      var bH = (geoMatchStrict(b.loc, cO) && !b.usNamesake) ? 0 : 1;
+      if(aH !== bH) return aH - bH;                                  // then in-country
+      var aR = Number(a.relScore) || 0, bR = Number(b.relScore) || 0;
+      if(aR !== bR) return bR - aR;                                  // then strongest role match
+      var aD = daysAgo(a.date), bD = daysAgo(b.date);
+      return (aD == null ? 15 : aD) - (bD == null ? 15 : bD);        // then freshest
+    });
+  }
   function applyLastResortEmailGuess(jobs){
     var guessed = [];
-    var cHome = curCountry();
     // Targeted diagnostic — tracing exactly why a specific HireLebanese
     // "Confidential" job lost its email and fell back to platform-apply,
     // when guessDomainFromCompanyName("Confidential") should still produce
@@ -3309,28 +3416,34 @@
     var hlSkipReasons = { alreadyHadEmail:0, realAtsSkipped:0, noDomainGuessed:0, guessed:0 };
     jobs.forEach(function(j){
       var isHl = j.src && j.src.indexOf('HireLebanese')===0;
-      if(j.email || !j.url){ if(isHl && j.email) hlSkipReasons.alreadyHadEmail++; return; }
-      // Real ask: a job whose Apply link points straight at a company's
-      // own careers page (common for AI-Discovery results — Toters,
-      // Massaya, etc.) was previously assumed to already have "a genuine
-      // Apply button that works fine" and skipped entirely — leaving it
-      // stuck as platform-apply forever, even though Hiraxia's whole
-      // point is finding a real email whenever possible, not settling
-      // for whatever apply mechanism happened to be easiest to link to.
-      // Per explicit instruction: every IN-COUNTRY job with a company
-      // name is triggered, full stop — no ATS exception there anymore.
-      // The genuine-ATS skip (Workday/Greenhouse/Lever/Workable/iCIMS/
-      // Taleo/SuccessFactors — "they want applications through their own
-      // system") is kept ONLY for MENA/remote jobs, to keep that volume
-      // bounded while the original reasoning still applies out-of-country.
-      var isHome = geoMatchStrict(j.loc, cHome);
-      if(!isHome && looksLikeRealATS(j)){ if(isHl) hlSkipReasons.realAtsSkipped++; return; }
-      var domain = guessDomainFromCompanyName(j.company);
+      // Per explicit instruction: EVERY job with a company name gets sent
+      // into email research — no exceptions for missing apply-URL or for
+      // ATS-hosted listings. Two gates that used to silently drop jobs
+      // here have been removed:
+      //   (1) "no j.url" — a job can have a perfectly good company name
+      //       and no usable apply link (AI-Discovery and several boards
+      //       produce these); the company name alone is enough to derive
+      //       a domain and research it.
+      //   (2) the ATS skip for out-of-country jobs — an employer using
+      //       Workday still has a real domain and often a published
+      //       recruitment address; researching it is exactly the point.
+      // Only a job that ALREADY has a real, evidence-backed email is
+      // skipped, since there is nothing left to find for it.
+      if(j.email){ if(isHl) hlSkipReasons.alreadyHadEmail++; return; }
+      var domain = guessDomainFromUrl(j.url) || guessDomainFromCompanyName(j.company);
+      // No derivable domain (no usable URL AND a generic/unusable company
+      // name like "Confidential") is the ONLY remaining reason to skip —
+      // there is genuinely nothing to search against.
       if(!domain){ if(isHl) hlSkipReasons.noDomainGuessed++; return; }
-      j.email = 'careers@' + domain;
-      j.emailPredicted = true;
+      // NOT j.email — see this function's own comment. These are inputs
+      // to the research engine, never outputs of it.
+      j.emailHypotheses = buildEmailHypotheses(domain);
+      j.predictedEmail = j.emailHypotheses[0];
+      j.emailPredicted = true;   // retained: every downstream research/priority path keys off this flag
+      j.emailConfidence = 'PREDICTED';
+      j.emailReady = false;
       j.src = (j.src||'') + ' (predicted from company name — not verified)';
-      j._lastResortDomain = domain; // kept temporarily so the background verify pass below knows what to check
+      j._lastResortDomain = domain; // the domain the hypotheses were built from — handed to AI research as a real starting point
       if(isHl) hlSkipReasons.guessed++;
       guessed.push(j);
     });
@@ -3493,17 +3606,61 @@
     // they did. Relevant jobs now always go first; off-field fillers only
     // fill remaining slots if genuinely relevant candidates don't use the
     // full budget.
-    var candidates = jobs.filter(function(j){ return !j.email || j.emailPredicted; });
-    var relevant = candidates.filter(function(j){ return !j.isStretch; });
-    var offField = candidates.filter(function(j){ return j.isStretch; });
-    var stillNeedEmail = relevant.concat(offField).slice(0, 20); // matches the backend's own default per-search cap; sending more than it would ever process is pointless
+    // Research priority, per explicit spec — don't spend expensive AI
+    // research equally on every job. Scores each candidate against the
+    // stated priority order, then researches the best ones first. The
+    // key rule: a predicted email makes a job ELIGIBLE for research, it
+    // does not make a garbage job worth researching.
+    function researchPriority(j){
+      var p = 0;
+      p += Math.min(Number(j.relScore)||0, 12) * 3;        // 1. job/profile match — dominant term
+      if(j.isStretch) p -= 40;                              // an off-field job is near-worthless to research
+      if(j.company && !isGenericCompanyName(j.company)) p += 8; // 2. clear real employer
+      if(j._lastResortDomain || guessDomainFromUrl(j.url)) p += 6; // 3. known company domain
+      var d = daysAgo(j.date);
+      if(d != null){ if(d <= 3) p += 5; else if(d <= 7) p += 3; else if(d <= 14) p += 1; } // 4. fresh
+      if(!j.email) p += 6;                                  // 5. no real email yet
+      if(j.emailHypotheses && j.emailHypotheses.length) p += 4; // 6. has hypotheses to test
+      if(geoMatchStrict(j.loc, curCountry()) && !j.usNamesake) p += 6; // local jobs matter most
+      // ATS-routed employers publish a recruitment address less often, so
+      // they rank slightly lower — but per explicit instruction they are
+      // NEVER excluded: an employer on Workday still has a real domain
+      // worth searching. A mild ordering penalty, not a gate.
+      if(looksLikeRealATS(j)) p -= 3;
+      return p;
+    }
+    var candidates = jobs.filter(function(j){ return !j.email; }); // a job with a REAL email needs no research; predicted ones have j.email null by design and stay eligible
+    // Hard floor: never spend a research request on something that is
+    // barely relevant, no matter how many hypotheses it carries.
+    var MIN_RESEARCH_PRIORITY = 0;
+    var passedThreshold = candidates
+      .map(function(j){ j._researchPriority = researchPriority(j); return j; })
+      .filter(function(j){ return j._researchPriority > MIN_RESEARCH_PRIORITY; })
+      .sort(function(a,b){ return b._researchPriority - a._researchPriority; });
+    var stillNeedEmail = passedThreshold.slice(0, 40); // matches the backend's own per-search cap (raised 20->40 now that AI is the primary email engine, not a fallback)
+    // Real coverage visibility: with every company-named job now eligible,
+    // the interesting number is how many WANTED research versus how many
+    // this pass could actually afford — a large gap is the real signal
+    // that the cap, not the eligibility rules, is the limiting factor.
+    // (The async predicted->real upgrade pass picks up the remainder.)
+    var withCompany = jobs.filter(function(j){ return !j.email && (j.emailHypotheses && j.emailHypotheses.length); }).length;
+    window.__researchCoverage = 'Email research coverage: '+jobs.length+' jobs \u2014 '+withCompany+' with a researchable company/domain, '
+      + passedThreshold.length+' passed the priority threshold, '+stillNeedEmail.length+' researched this pass'
+      + (passedThreshold.length > stillNeedEmail.length ? ' ('+(passedThreshold.length - stillNeedEmail.length)+' deferred to background enrichment)' : '');
     if(!stillNeedEmail.length){
-      appendDiagLine('AI research: skipped — every job already had a confirmed email'); // real gap: this silently returned with zero trace before, indistinguishable from the feature never running at all
+      appendDiagLine('AI research: skipped — every job already had a confirmed email, or none passed the research-priority threshold'); // real gap: this silently returned with zero trace before, indistinguishable from the feature never running at all
       return Promise.resolve();
     }
+    appendDiagLine(window.__researchCoverage);
     var base = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
     var payload = stillNeedEmail.map(function(j){
-      return { title:j.title, company:j.company, loc:j.loc, url:j.url, desc:j.desc };
+      // Hypotheses and the known domain are handed to the research engine
+      // as INPUTS — search leads, explicitly not answers. The backend
+      // prompt is instructed to treat them as unverified candidates to
+      // look for evidence of, never to return one back as a result.
+      return { title:j.title, company:j.company, loc:j.loc, url:j.url, desc:j.desc,
+               domain: j._lastResortDomain || guessDomainFromUrl(j.url) || null,
+               emailHypotheses: j.emailHypotheses || [] };
     });
     return fetchWithTimeout(base+'/ai-research', {
       method:'POST', headers: backendHeaders({'Content-Type':'application/json'}),
@@ -3530,9 +3687,22 @@
           jobs.forEach(function(j){
             var match = j.url && byUrl[j.url];
             if(!match) return;
+            // Real evidence from the research engine — this is the
+            // PROMOTE step. Records what the evidence actually was, so
+            // the UI can show provenance rather than a bare address.
             j.email = match.email;
             j.emailPredicted = false;
             j.emailVerified = match.confidence === 'high';
+            j.emailConfidence = 'RESEARCHED';
+            j.emailReady = true;
+            j.emailEvidence = (match.sourceType||'research') + (match.sourceUrl ? ' — ' + match.sourceUrl : '');
+            j.emailSource = match.sourceUrl || null;
+            // Real, reportable outcome per the product rule: did the
+            // research CONFIRM one of our hypotheses, or find something
+            // else entirely (meaning the guess would have been wrong)?
+            if(j.emailHypotheses && j.emailHypotheses.length){
+              j.hypothesisConfirmed = j.emailHypotheses.indexOf(match.email) > -1;
+            }
             j.src = (j.src||'') + ' (email via AI research: '+(match.sourceType||'?')+')';
           });
           if(renderJobs.lastOk !== undefined) renderJobs(renderJobs.lastOk, renderJobs.lastSrcNames);
@@ -3684,7 +3854,9 @@
   // can call the exact same real logic instead of two versions drifting
   // apart over time.
   function verifyPredictedEmail(j, domain){
-    var patterns = ['careers@'+domain, 'hr@'+domain, 'jobs@'+domain];
+    // Uses the same hypothesis set the AI research engine gets, so the two
+    // evidence paths test identical candidates rather than drifting.
+    var patterns = (j.emailHypotheses && j.emailHypotheses.length) ? j.emailHypotheses.slice(0, 3) : buildEmailHypotheses(domain).slice(0, 3);
     // Real gap found while reviewing this: this used to check the frontend's
     // own localStorage for a Gamalogic key — a value that could only ever
     // be set through a settings-panel field removed entirely a while back,
@@ -3700,17 +3872,21 @@
         body: JSON.stringify({ email: p })
       }, 8000).then(function(r){ return r.ok ? r.json() : {valid:null, error:'HTTP '+r.status}; }).catch(function(e){ return {valid:null, error:String(e.message||e).slice(0,60)}; });
     })).then(function(results){
+      // Per product rule: an unverifiable hypothesis stays a hypothesis.
+      // j.email is NOT set here — only a positively verified address is
+      // ever promoted into it.
       if(results[0] && results[0].configured === false){
-        j.email = patterns[0]; j.emailPredicted = true;
         return { verified:false, note:'GAMALOGIC_KEY not set on server - verification skipped' };
       }
       var validOnes = patterns.filter(function(p, i){ return results[i].valid === true; });
       if(validOnes.length === 1){
+        // Real evidence (a positive mailbox check) — promote it.
         j.email = validOnes[0]; j.emailPredicted = false; j.emailVerified = true;
+        j.emailConfidence = 'VERIFIED'; j.emailReady = true;
+        j.emailEvidence = 'mailbox verification (Gamalogic) confirmed this address accepts mail';
         try{ emailCacheSet(domain, validOnes[0], true); }catch(e){}
         return { verified:true, note:'predicted email VERIFIED via pattern check' };
       }
-      j.email = patterns[0]; j.emailPredicted = true;
       var detail = results.map(function(r,i){
         var status = r.valid===true?'valid':r.valid===false?'invalid':r.valid==='catch-all'?'catch-all':'unknown';
         var rawPreview = r.raw ? JSON.stringify(r.raw).slice(0,120) : (r.error||'no raw data');
@@ -3734,12 +3910,18 @@
       if(key) seenCompaniesFCTE[key] = true;
       return true;
     });
-    // Same home-country priority as enrichWithHunterEmail - full coverage
-    // for the current country's own jobs, other regions fill remaining slots.
+    // Audit finding: the comment here claimed "full coverage for the
+    // current country's own jobs", but the code capped home-country at
+    // 20 — the exact comment-vs-code mismatch already fixed once in
+    // enrichWithHunterEmail. In-country jobs are genuinely uncapped now,
+    // and BOTH phases are ordered by relevance first (see
+    // orderForEmailDiscovery) so the customer's actual role is served
+    // before off-field fillers rather than in arbitrary array order.
     var cHomeFCTE = curCountry();
-    var homeFCTE = dedupedFCTE.filter(function(j){ return geoMatchStrict(j.loc, cHomeFCTE); });
-    var otherFCTE = dedupedFCTE.filter(function(j){ return !geoMatchStrict(j.loc, cHomeFCTE); });
-    var candidates = homeFCTE.slice(0, 20).concat(otherFCTE.slice(0, Math.max(0, 25 - Math.min(homeFCTE.length, 20))));
+    var orderedFCTE = orderForEmailDiscovery(dedupedFCTE);
+    var homeFCTE = orderedFCTE.filter(function(j){ return geoMatchStrict(j.loc, cHomeFCTE) && !j.usNamesake; });
+    var otherFCTE = orderedFCTE.filter(function(j){ return !(geoMatchStrict(j.loc, cHomeFCTE) && !j.usNamesake); });
+    var candidates = homeFCTE.concat(otherFCTE.slice(0, 30));
     if(!candidates.length) return Promise.resolve(jobs);
     var found = 0, errors = [];
 
@@ -3813,9 +3995,22 @@
           // no reason to pay that cost again.
           return emailCacheGetShared(info.domain).then(function(shared){
             if(shared.found){
-              j.email = shared.email; j.emailPredicted = !shared.verified; j.emailVerified = !!shared.verified;
-              j.src = (j.src||'') + ' (email via shared cache)';
-              errors.push((info.domain||'?')+': found in shared cache, no new search needed');
+              // Per product rule: SHARED_CACHE counts as evidence-backed
+              // ONLY if what was cached was itself verified. An unverified
+              // cached value is someone else's unproven hypothesis — it
+              // stays a hypothesis here too rather than being promoted
+              // into j.email and shown as email-apply.
+              if(shared.verified){
+                j.email = shared.email; j.emailPredicted = false; j.emailVerified = true;
+                j.emailConfidence = 'SHARED_CACHE'; j.emailReady = true;
+                j.emailEvidence = 'previously verified for ' + (info.domain||'this domain') + ' and reused from the shared company cache';
+                j.src = (j.src||'') + ' (email via shared cache)';
+                errors.push((info.domain||'?')+': found in shared cache, no new search needed');
+                return;
+              }
+              j.predictedEmail = j.predictedEmail || shared.email;
+              j.emailPredicted = true; j.emailConfidence = 'PREDICTED'; j.emailReady = false;
+              errors.push((info.domain||'?')+': shared cache had only an UNVERIFIED value — kept as hypothesis, not promoted');
               return;
             }
             return relayFetchText(info.fetchUrl)
@@ -3881,9 +4076,16 @@
         var key = (j.company||'').toLowerCase().trim();
         if(!key || isGenericCompanyName(key) || !byCompany[key]) return;
         var source = byCompany[key];
+        // Only ever propagate a genuinely evidence-backed email. A
+        // hypothesis must never spread across an employer's other jobs
+        // and multiply one guess into many apparent "results".
+        if(!source.email || source.emailPredicted) return;
         j.email = source.email;
-        j.emailPredicted = source.emailPredicted;
+        j.emailPredicted = false;
         j.emailVerified = source.emailVerified;
+        j.emailConfidence = source.emailConfidence || 'RESEARCHED';
+        j.emailReady = true;
+        j.emailEvidence = 'same employer as a job where this address was found: ' + (source.emailEvidence || source.title || key);
         j.src = (j.src||'') + ' (email via same-employer match)';
         propagated++;
       });
@@ -4264,17 +4466,17 @@
   function enrichWithHunterEmail(jobs){
     var GENERIC_COMPANY_NAMES = /^(private company|confidential|client of|undisclosed)/i;
     var cHome = curCountry();
-    // Per explicit instruction: every in-country job with a real company
-    // name must be triggered for recruitment-email lookup — no ATS
-    // exception for in-country. The ATS skip (Workday/Greenhouse/Lever/
-    // Workable/iCIMS/etc. — "they want applications through their own
-    // system") stays in place for MENA/remote jobs only, where the
-    // original reasoning still applies and volume needs to stay bounded.
+    // Per explicit instruction: EVERY job with a usable company name or
+    // domain goes into recruitment-email lookup — the ATS exception that
+    // used to exclude out-of-country ATS-hosted jobs is gone. An employer
+    // using Workday/Greenhouse still has a real domain and frequently a
+    // published recruitment address; skipping them was leaving findable
+    // emails on the table. The only jobs excluded now are ones that
+    // already have a real email (nothing left to find) or have neither a
+    // usable domain nor a real company name (nothing to search against).
     var eligible = jobs.filter(function(j){
       if(j.email) return false;
-      if(!(guessDomainFromUrl(j.url) || (j.company && !GENERIC_COMPANY_NAMES.test(j.company)))) return false;
-      var isHome = geoMatchStrict(j.loc, cHome);
-      return isHome || !looksLikeRealATS(j);
+      return !!(guessDomainFromUrl(j.url) || (j.company && !GENERIC_COMPANY_NAMES.test(j.company)));
     });
     var seenCompanies = {};
     var deduped = eligible.filter(function(j){
@@ -4290,15 +4492,18 @@
     // Home country is now genuinely uncapped; other regions still get a
     // reasonable ceiling so a heavy home-country day doesn't block them
     // entirely, but they never take a slot away from an in-country job.
-    var homeCandidates = deduped.filter(function(j){ return geoMatchStrict(j.loc, cHome); });
-    var otherCandidates = deduped.filter(function(j){ return !geoMatchStrict(j.loc, cHome); }).slice(0, 30);
+    var homeCandidates = orderForEmailDiscovery(deduped.filter(function(j){ return geoMatchStrict(j.loc, cHome) && !j.usNamesake; }));
+    // Relevance-ordered before slicing: the 30 out-of-country slots now
+    // go to the most role-relevant jobs rather than whichever happened to
+    // sit first in the array.
+    var otherCandidates = orderForEmailDiscovery(deduped.filter(function(j){ return !(geoMatchStrict(j.loc, cHome) && !j.usNamesake); })).slice(0, 30);
     var candidates = homeCandidates.concat(otherCandidates);
     if(!candidates.length){
       window.__hunterDebug = 'Email search: 0 eligible jobs this search (all had an email or no usable domain/company name)';
       console.log(window.__hunterDebug);
       return Promise.resolve(jobs);
     }
-    var found = 0, prospeoFound = 0, backendFinderUsed = 0, errors = [], backendDomainFound = 0;
+    var found = 0, prospeoFound = 0, backendFinderUsed = 0, errors = [], backendDomainFound = 0, handedToAi = 0;
     // Real gap found: dedup above only sends ONE representative job per
     // company through the actual domain/Hunter lookup (a real, deliberate
     // efficiency choice — no reason to burn 5 domain calls on the same
@@ -4427,7 +4632,15 @@
               try{ emailCacheSet(r.domain, rapidEmail); }catch(e){}
               applyToCompanySiblings((r.job.company||'').toLowerCase().trim(), rapidEmail, ' (email via RapidAPI finder)');
             } else {
-              errors.push(r.domain+': Hunter — '+hunterReason+'; Prospeo — '+prospeoReason+'; RapidAPI finder — '+(rapidReason||'no email either'));
+              // Paid-API path found nothing. This is NOT a dead end — the
+              // job keeps j.email null and stays fully eligible for AI
+              // research, which runs after this pass and does real web
+              // search + evidence validation. With Hunter disabled since
+              // its free tier ran out, this handoff is the normal case
+              // rather than the exception, so it's counted explicitly
+              // instead of just being logged as three failures.
+              handedToAi++;
+              errors.push(r.domain+': Hunter — '+hunterReason+'; Prospeo — '+prospeoReason+'; RapidAPI finder — '+(rapidReason||'no email either')+' \u2014 handed to AI research');
             }
           });
         });
@@ -4445,6 +4658,7 @@
         (prospeoFound ? ' \u00b7 Prospeo fallback: found '+prospeoFound : '')+
         (backendFinderUsed ? ' \u00b7 RapidAPI finder fallback: found '+backendFinderUsed : '')+
         (backendDomainFound ? ' ('+backendDomainFound+' via backend domain-finder)' : '')+
+        (handedToAi ? ' \u00b7 '+handedToAi+' handed to AI research (paid APIs found nothing \u2014 Hunter is disabled, so this is the normal path)' : '')+
         (errors.length ? ' — '+errors.join(' \u00b7 ') : '');
       console.log(window.__hunterDebug);
       return jobs;
@@ -4665,9 +4879,15 @@
     var city = curCity().toLowerCase();
     if(city && String(job.loc||'').toLowerCase().indexOf(city.split(',')[0].split(' ')[0])>-1) s += 4;
     if(c.keys.length){
-      if(geoMatchStrict(job.loc, c)) s += 8;
-      else if(c.mena && menaMatch(job.loc)) s += 5;
-      else if(isRemoteish(job.loc)) s += 2;
+      // usNamesake: a job that is really in Lebanon OHIO must never score
+      // as an in-country Lebanon match — see jobIsUsNamesake.
+      if(geoMatchStrict(job.loc, c) && !job.usNamesake) s += 8;
+      else if(c.mena && menaMatch(job.loc) && !job.usNamesake) s += 5;
+      // Real fix: only a GENUINELY remote job earns the "location doesn't
+      // matter" bonus. A mislabeled on-site role (see isFakeRemote) falls
+      // through to the same -5 any other out-of-country job gets, instead
+      // of outranking real in-country jobs.
+      else if(isRemoteish(job.loc) && !isFakeRemote(job)) s += 2;
       else s -= 5;
     }
     if(job.nearbyRole && !job.isStretch) s += 4; // same field, nearby country — keep it high
@@ -4998,10 +5218,18 @@
     // to actually matter to the person searching.
     var c = curCountry();
     var relevant = jobs.filter(function(j){ return j.emailPredicted && !j.isStretch; });
-    var inCountry = relevant.filter(function(j){ return geoMatchStrict(j.loc, c); });
-    var restRelevant = relevant.filter(function(j){ return !geoMatchStrict(j.loc, c); });
+    // Relevance-ordered within each geo phase, so the strongest role
+    // matches are researched first even if the run hits its time limit
+    // partway through — previously this was raw array order.
+    var inCountry = orderForEmailDiscovery(relevant.filter(function(j){ return geoMatchStrict(j.loc, c) && !j.usNamesake; }));
+    var restRelevant = orderForEmailDiscovery(relevant.filter(function(j){ return !(geoMatchStrict(j.loc, c) && !j.usNamesake); }));
     var candidates = inCountry.concat(restRelevant).map(function(j){
-      return { title:j.title, company:j.company, loc:j.loc, url:j.url, desc:j.desc };
+      // Same hypothesis-as-input contract as the sync research path:
+      // domain and candidate addresses are search leads for the engine
+      // to find evidence for, never answers it may echo back.
+      return { title:j.title, company:j.company, loc:j.loc, url:j.url, desc:j.desc,
+               domain: j._lastResortDomain || guessDomainFromUrl(j.url) || null,
+               emailHypotheses: j.emailHypotheses || [] };
     });
     if(!candidates.length) return Promise.resolve();
     var base = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
@@ -5029,9 +5257,18 @@
                   appliedUrls[r.url] = true;
                   var match = allJobs.find(function(j){ return j.url === r.url; });
                   if(match){
+                    // PROMOTE step — evidence came back, so this stops
+                    // being a hypothesis and becomes a real result.
                     match.email = r.email;
                     match.emailPredicted = false;
                     match.emailVerified = r.confidence === 'high';
+                    match.emailConfidence = 'RESEARCHED';
+                    match.emailReady = true;
+                    match.emailEvidence = (r.sourceType||'research') + (r.sourceUrl ? ' — ' + r.sourceUrl : '');
+                    match.emailSource = r.sourceUrl || null;
+                    if(match.emailHypotheses && match.emailHypotheses.length){
+                      match.hypothesisConfirmed = match.emailHypotheses.indexOf(r.email) > -1;
+                    }
                     match.src = (match.src||'') + ' (email via AI research: '+(r.sourceType||'upgraded from predicted')+')';
                   }
                 });
@@ -5611,10 +5848,36 @@
     // out first, giving the server a head start waking up in the background
     // while the rest of this function's setup logic runs, before the real
     // batch of parallel source calls fires further down.
-    try{
-      var wakeBase = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
-      if(wakeBase) fetch(wakeBase+'/version', {method:'GET'}).catch(function(){});
-    }catch(e){}
+    // Real bug found via user report: EVERY source timed out at once
+    // (GoogleJobs, Jooble, Careerjet, Workable, Himalayas, RemoteJobs,
+    // JobsPipe, HireLebanese, Daleel Madani, AI-Discovery) — independent
+    // code paths and unrelated providers failing simultaneously only
+    // happens when the backend itself is unreachable, i.e. a Render cold
+    // start. This ping already existed but was fire-and-forget: it went
+    // out and the full batch of parallel source calls fired immediately
+    // behind it, into a server that was still booting. Now the ping is a
+    // real promise the source fan-out actually WAITS on (bounded, with
+    // retries), so a cold start costs a few seconds instead of wasting
+    // the entire search. It always resolves — never rejects — so a
+    // genuinely dead backend still proceeds and fails honestly per-source
+    // rather than hanging the whole UI.
+    var backendWarm = (function(){
+      var wakeBase = '';
+      try{ wakeBase = lsGet('hiraxia_proxyUrl').replace(/\/+$/,''); }catch(e){}
+      if(!wakeBase) return Promise.resolve(false);
+      var attempts = 0;
+      function ping(){
+        attempts++;
+        return fetchWithTimeout(wakeBase+'/version', {method:'GET'}, 12000)
+          .then(function(r){ return r.ok ? true : retry(); })
+          .catch(function(){ return retry(); });
+      }
+      function retry(){
+        if(attempts >= 4) return false; // ~48s ceiling — past a normal Render cold start; proceed and let sources report real errors
+        return new Promise(function(res){ setTimeout(res, 1500); }).then(ping);
+      }
+      return ping();
+    })();
     // Real bug found via user report: this flag never reset after the first
     // search of the session, so every later search kept showing the FIRST
     // search's backend-version/Serper-status instead of a fresh read.
@@ -5653,549 +5916,569 @@
     var searchSessionId = 'sess_'+Date.now()+'_'+Math.random().toString(36).slice(2,8);
     window.__lastSearchSessionId = searchSessionId; // exposed for manual lookup against /ai-search-diagnostics/<id>
     window.__pendingAiPipelines = 2; // deep discovery + predicted-upgrade — the single-search diagnostic waits for both
-    var named = [
-      {n:'GoogleJobs', p:sourceGoogleJobs(q)},
-      {n:'Jooble', p:sourceJooble(q, (curCity() ? curCity()+(c.gj?', '+c.gj:'') : (c.gj || '')))},
-      {n:'Careerjet', p:sourceCareerjet(q, (curCity() || c.gj || ''), c.v)},
-      {n:'ReliefWeb', p:sourceReliefWeb(q, c.gj)},
-      {n:'ReliefWeb\u00b7RSS', p:sourceReliefWebRSS(q, c.gj)},
-      {n:'Workable-search', p:sourceWorkableSearch(q, (curCity() || c.gj || ''))},
-      (c.v==='lb' ? {n:'Jooble\u00b7Beirut', p:sourceJooble(q, 'Beirut')} : null),
-      {n:'Remotive', p:sourceRemotive(q)},
-      {n:'Arbeitnow', p:sourceArbeitnow(q)},
-      {n:'Jobicy', p:sourceJobicy(q)},
-      {n:'TheMuse', p:sourceMuse(q)},
-      {n:'Himalayas', p:new Promise(function(res){ setTimeout(function(){ res(sourceHimalayas(q)); }, 300); }).then(function(p){ return p; })},
-      {n:'RemoteJobs.org', p:new Promise(function(res){ setTimeout(function(){ res(sourceRemoteJobsOrg(q)); }, 600); }).then(function(p){ return p; })},
-      {n:'JobsPipe', p:new Promise(function(res){ setTimeout(function(){ res(sourceJobsPipe(q, (c.v==='sa2'?'sa':(c.v==='remote'?'':c.v)))); }, 900); }).then(function(p){ return p; })},
-      (c.v==='lb' ? {n:'HireLebanese', p:new Promise(function(res){ setTimeout(function(){ res(sourceHireLebanese(q)); }, 1200); }).then(function(p){ return p; })} : null),
-      (c.v==='lb' ? {n:'Daleel Madani', p:new Promise(function(res){ setTimeout(function(){ res(sourceDaleelMadani(q)); }, 1350); }).then(function(p){ return p; })} : null),
-      {n:'WebSearch', p:new Promise(function(res){ setTimeout(function(){ res(sourceWebSearchJobs(q, curCity() || c.gj || '')); }, 1500); }).then(function(p){ return p; })},
-      {n:'AI-Discovery', p:new Promise(function(res){ setTimeout(function(){
-        // Real ask: "let it search wider for the same job" — if a specific
-        // city is selected, the backend retries with the country-level
-        // location if the city-level search finds nothing, rather than
-        // just declaring zero results from one narrow attempt.
-        var cityLoc = curCity();
-        var countryLoc = c.gj || '';
-        res(sourceAiDiscoveredJobs(q, cityLoc || countryLoc || '', cityLoc ? countryLoc : '', searchSessionId));
-      }, 1800); }).then(function(p){ return p; })}
-    ];
-    // Bounded query-expansion pass — see getSynonymForQuery's own comment.
-    // Only the two highest-volume sources, only when a real match is found,
-    // so this can't quietly become an unbounded cost multiplier on every
-    // ordinary search.
-    var synonymQ = getSynonymForQuery(q);
-    if(synonymQ){
-      named.push({n:'GoogleJobs\u00b7synonym', p:sourceGoogleJobs(synonymQ)});
-      named.push({n:'Jooble\u00b7synonym', p:sourceJooble(synonymQ, (curCity() ? curCity()+(c.gj?', '+c.gj:'') : (c.gj || '')))});
-    }
-    // self-service ATS boards: add whatever tokens the user has saved in settings
-    (lsGet('hiraxia_greenhouseTokens') || 'careem,tamara').split(',').map(function(t){ return t.trim(); }).filter(Boolean).slice(0,15).forEach(function(tok){
-      named.push({ n:'Greenhouse\u00b7'+tok, p:sourceGreenhouse(tok, q) });
-    });
-    (lsGet('hiraxia_leverTokens')||'').split(',').map(function(t){ return t.trim(); }).filter(Boolean).slice(0,10).forEach(function(tok){
-      named.push({ n:'Lever\u00b7'+tok, p:sourceLever(tok, q) });
-    });
-    (lsGet('hiraxia_workableTokens')||'').split(',').map(function(t){ return t.trim(); }).filter(Boolean).slice(0,10).forEach(function(tok){
-      named.push({ n:'Workable\u00b7'+tok, p:sourceWorkable(tok, q) });
-    });
-    named = named.filter(Boolean);
-    named.push({n:'RemoteOK', p:sourceRemoteOK(q)}); // remote roles are relevant regardless of the searcher's country
-    if(c.adz) named.push({n:'Adzuna', p:sourceAdzuna(q, c.adz)});
-
-    Promise.allSettled(named.map(function(x){ return x.p; })).then(function(results){
-      var gjWorked = results[0].status==='fulfilled' && results[0].value.length > 0;
-      var gjRawLocs = gjWorked ? results[0].value.slice(0,6).map(function(j){ return j.loc; }) : [];
-      var gjError = results[0].status==='rejected' ? String(results[0].reason && results[0].reason.message || results[0].reason) : '';
-      if(results[0].status==='fulfilled' && results[0].value.length===0) gjError = 'connected but returned 0 results for this query/country';
-      var fails = [], jobs = [], okSources = 0, srcNames = [];
-      results.forEach(function(r, i){
-        console.log('Source:', named[i].n, 'Jobs found:', r.status==='fulfilled' ? r.value.length : ('FAILED: '+String(r.reason && r.reason.message || r.reason)));
-        if(r.status==='fulfilled' && r.value.length){
-          okSources++;
-          srcNames.push(named[i].n+' ('+r.value.length+')');
-          jobs = jobs.concat(r.value);
-        } else if(r.status==='fulfilled'){
-          // ran successfully but found nothing — show it explicitly so "silent" never means "didn't run"
-          srcNames.push(named[i].n+' (0)');
-        } else if(r.status==='rejected'){
-          var msg = String(r.reason && r.reason.message || 'network/CORS blocked');
-          if(msg.indexOf('no key')===-1) fails.push(named[i].n+' \u2717 ('+msg.slice(0,60)+')');
-        }
+    // Real fix for the all-sources-timed-out failure: the source batch
+    // now WAITS for the backend to actually respond (see backendWarm
+    // above) instead of firing into a still-booting server. Wrapped in a
+    // function so none of these promises are even CREATED until then —
+    // building the array eagerly would start every fetch immediately,
+    // which is exactly the bug.
+    function fireSources(){
+      var named = [
+        {n:'GoogleJobs', p:sourceGoogleJobs(q)},
+        {n:'Jooble', p:sourceJooble(q, (curCity() ? curCity()+(c.gj?', '+c.gj:'') : (c.gj || '')))},
+        {n:'Careerjet', p:sourceCareerjet(q, (curCity() || c.gj || ''), c.v)},
+        {n:'ReliefWeb', p:sourceReliefWeb(q, c.gj)},
+        {n:'ReliefWeb\u00b7RSS', p:sourceReliefWebRSS(q, c.gj)},
+        {n:'Workable-search', p:sourceWorkableSearch(q, (curCity() || c.gj || ''))},
+        (c.v==='lb' ? {n:'Jooble\u00b7Beirut', p:sourceJooble(q, 'Beirut')} : null),
+        {n:'Remotive', p:sourceRemotive(q)},
+        {n:'Arbeitnow', p:sourceArbeitnow(q)},
+        {n:'Jobicy', p:sourceJobicy(q)},
+        {n:'TheMuse', p:sourceMuse(q)},
+        {n:'Himalayas', p:new Promise(function(res){ setTimeout(function(){ res(sourceHimalayas(q)); }, 300); }).then(function(p){ return p; })},
+        {n:'RemoteJobs.org', p:new Promise(function(res){ setTimeout(function(){ res(sourceRemoteJobsOrg(q)); }, 600); }).then(function(p){ return p; })},
+        {n:'JobsPipe', p:new Promise(function(res){ setTimeout(function(){ res(sourceJobsPipe(q, (c.v==='sa2'?'sa':(c.v==='remote'?'':c.v)))); }, 900); }).then(function(p){ return p; })},
+        (c.v==='lb' ? {n:'HireLebanese', p:new Promise(function(res){ setTimeout(function(){ res(sourceHireLebanese(q)); }, 1200); }).then(function(p){ return p; })} : null),
+        (c.v==='lb' ? {n:'Daleel Madani', p:new Promise(function(res){ setTimeout(function(){ res(sourceDaleelMadani(q)); }, 1350); }).then(function(p){ return p; })} : null),
+        {n:'WebSearch', p:new Promise(function(res){ setTimeout(function(){ res(sourceWebSearchJobs(q, curCity() || c.gj || '')); }, 1500); }).then(function(p){ return p; })},
+        {n:'AI-Discovery', p:new Promise(function(res){ setTimeout(function(){
+          // Real ask: "let it search wider for the same job" — if a specific
+          // city is selected, the backend retries with the country-level
+          // location if the city-level search finds nothing, rather than
+          // just declaring zero results from one narrow attempt.
+          var cityLoc = curCity();
+          var countryLoc = c.gj || '';
+          res(sourceAiDiscoveredJobs(q, cityLoc || countryLoc || '', cityLoc ? countryLoc : '', searchSessionId));
+        }, 1800); }).then(function(p){ return p; })}
+      ];
+      // Bounded query-expansion pass — see getSynonymForQuery's own comment.
+      // Only the two highest-volume sources, only when a real match is found,
+      // so this can't quietly become an unbounded cost multiplier on every
+      // ordinary search.
+      var synonymQ = getSynonymForQuery(q);
+      if(synonymQ){
+        named.push({n:'GoogleJobs\u00b7synonym', p:sourceGoogleJobs(synonymQ)});
+        named.push({n:'Jooble\u00b7synonym', p:sourceJooble(synonymQ, (curCity() ? curCity()+(c.gj?', '+c.gj:'') : (c.gj || '')))});
+      }
+      // self-service ATS boards: add whatever tokens the user has saved in settings
+      (lsGet('hiraxia_greenhouseTokens') || 'careem,tamara').split(',').map(function(t){ return t.trim(); }).filter(Boolean).slice(0,15).forEach(function(tok){
+        named.push({ n:'Greenhouse\u00b7'+tok, p:sourceGreenhouse(tok, q) });
       });
+      (lsGet('hiraxia_leverTokens')||'').split(',').map(function(t){ return t.trim(); }).filter(Boolean).slice(0,10).forEach(function(tok){
+        named.push({ n:'Lever\u00b7'+tok, p:sourceLever(tok, q) });
+      });
+      (lsGet('hiraxia_workableTokens')||'').split(',').map(function(t){ return t.trim(); }).filter(Boolean).slice(0,10).forEach(function(tok){
+        named.push({ n:'Workable\u00b7'+tok, p:sourceWorkable(tok, q) });
+      });
+      named = named.filter(Boolean);
+      named.push({n:'RemoteOK', p:sourceRemoteOK(q)}); // remote roles are relevant regardless of the searcher's country
+      if(c.adz) named.push({n:'Adzuna', p:sourceAdzuna(q, c.adz)});
 
-      var rawJobsCount = jobs.length; // before dedup — total raw jobs across every source, duplicates included
-      jobs = dedupeJobs(jobs).filter(function(j){ return !j.date || daysAgo(j.date) <= 20; });
-      var uniqueJobsCount = jobs.length; // after dedup, still includes off-field "stretch" fillers at this point
-
-      // Real audit deliverable: "Initial sources: X jobs" in the single-
-      // search diagnostic is a number that only ever existed client-side
-      // — the backend has no visibility into it at all. Reported once,
-      // fire-and-forget, right at the point where the combined source
-      // pool is final but before any AI enrichment has touched it.
-      try{
-        var base0 = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
-        fetch(base0+'/ai-search-marker', {
-          method:'POST', headers: backendHeaders({'Content-Type':'application/json'}),
-          body: JSON.stringify({ searchSessionId: searchSessionId, query: q, location: c.label||c.v, initialJobCount: uniqueJobsCount })
-        }).catch(function(){});
-      }catch(e){}
-
-      function processAndFinish(list, widened){
-        if(c.keys.length){
-          if(c.mena){ list = list.filter(function(j){ return geoMatchStrict(j.loc, c) || menaMatch(j.loc) || isRemoteish(j.loc); }); }
-        }
-        // catch any job whose real apply method is actually email, buried in its own
-        // description text — not just jobs where a source API gave us a clean field
-        list.forEach(function(j){
-          if(!j.email){
-            var found = extractEmailFromText(j.desc) || extractEmailFromText(j.title);
-            if(found) j.email = found;
+      Promise.allSettled(named.map(function(x){ return x.p; })).then(function(results){
+        var gjWorked = results[0].status==='fulfilled' && results[0].value.length > 0;
+        var gjRawLocs = gjWorked ? results[0].value.slice(0,6).map(function(j){ return j.loc; }) : [];
+        var gjError = results[0].status==='rejected' ? String(results[0].reason && results[0].reason.message || results[0].reason) : '';
+        if(results[0].status==='fulfilled' && results[0].value.length===0) gjError = 'connected but returned 0 results for this query/country';
+        var fails = [], jobs = [], okSources = 0, srcNames = [];
+        results.forEach(function(r, i){
+          console.log('Source:', named[i].n, 'Jobs found:', r.status==='fulfilled' ? r.value.length : ('FAILED: '+String(r.reason && r.reason.message || r.reason)));
+          if(r.status==='fulfilled' && r.value.length){
+            okSources++;
+            srcNames.push(named[i].n+' ('+r.value.length+')');
+            jobs = jobs.concat(r.value);
+          } else if(r.status==='fulfilled'){
+            // ran successfully but found nothing — show it explicitly so "silent" never means "didn't run"
+            srcNames.push(named[i].n+' (0)');
+          } else if(r.status==='rejected'){
+            var msg = String(r.reason && r.reason.message || 'network/CORS blocked');
+            if(msg.indexOf('no key')===-1) fails.push(named[i].n+' \u2717 ('+msg.slice(0,60)+')');
           }
         });
-        // Upgrade the company field from the description text itself when it's
-        // missing, generic ("Private Company"), or is just the aggregator's own
-        // brand (e.g. bebee.com listings that never filled in a real company name).
-        // Doing this BEFORE the email-finder chain below means Anymail/Hunter/Prospeo
-        // search for the REAL employer from the first attempt, not as a late fix.
-        list.forEach(function(j){
-          // Real bug found via user report: "Job Description Roles &
-          // Responsibilities CBM" was being used as a company name -
-          // clearly a section-header fragment from the posting itself, not
-          // an actual organization name. Added detection for this pattern
-          // alongside the existing checks.
-          var looksLikeBoilerplate = j.company && /\b(job description|roles?\s*&?\s*responsibilities|requirements|qualifications|job summary|about (the|this) (role|position|job)|key responsibilities)\b/i.test(j.company);
-          var bad = !j.company || j.company.length<2 || /^(private company|confidential|client of|undisclosed)/i.test(j.company) || AGGREGATOR_BRAND_WORDS.test(j.company) || looksLikeBoilerplate;
-          if(bad){
-            var realName = extractCompanyFromDescription(j.desc, j.company);
-            if(realName) j.company = realName;
-            // Real bug found via user report: "WUZZUF" and similar job-board
-            // brand names kept showing up as if they were the actual employer,
-            // repeatedly, across many searches. Root cause: when re-extraction
-            // above fails to find a real name, the known-wrong aggregator name
-            // was left in place and used for the entire rest of the pipeline —
-            // wasting an Anymail attempt and a domain search on "WUZZUF's
-            // website" instead of ever trying to find the real employer. Clear
-            // it instead, so the job is correctly treated as "no reliable
-            // company name" — findCompanyThenEmail's own JSON-LD-based name
-            // extraction (reading the job's own page later) still gets a real
-            // chance to find the true name independently.
-            else j.company = '';
-          }
-          // New source (RemoteJobs.org) hands us the company's real website
-          // directly, verified by the source itself — store it as a known
-          // domain so the email-finding stages can skip the entire fragile
-          // domain-search step (Tavily/Brave/DuckDuckGo) for these jobs,
-          // going straight to scanning the real site.
-          if(j.companyWebsite && !j.knownDomain){
-            try{
-              var wsHost = new URL(j.companyWebsite).hostname.replace(/^www\./,'');
-              // Real gap found via user report: this shortcut skips the whole
-              // domain-search chain (and its aggregator-blocklist check) for
-              // speed, but that meant the source's OWN domain could slip
-              // through untouched if its "company website" field ever fell
-              // back to itself for an incomplete listing (confirmed: two
-              // "remotejobs.org" jobs reached Hunter with remotejobs.org
-              // itself as the target). Same guard used everywhere else.
-              if(!/^(remotejobs\.org|himalayas\.app)$/i.test(wsHost)) j.knownDomain = wsHost;
-            }catch(e){}
-          }
-        });
-        // BUG FIX: enrichment (Tavily/Hunter/screenshot) used to run on the RAW,
-        // unsorted API order — meaning the limited "top 10" candidate slots could
-        // go to low-relevance jobs while a genuinely top-matching job got skipped
-        // entirely. This preliminary sort (by relevance only, ignoring email status
-        // since it isn't finalized yet) ensures the real top matches get enrichment
-        // priority. finishProcessing() below still re-sorts with the full score
-        // (including the email bonus) for final display accuracy.
-        list.forEach(function(j){ j.score = scoreJob(j); });
-        list.sort(function(a,b){ return b.score - a.score; });
-        // Hiraxia's whole point is email-apply only — no showing platform-apply
-        // jobs while emails are still being searched. Wait for the full chain,
-        // then finishProcessing() filters to email-only before ever rendering.
-        setThinking('Found the roles — now finding real recruiter emails for each one\u2026', 70);
-        // Real gap found via user report: even with a timeout on EVERY individual
-        // network call, up to 20 jobs \u00d7 up to 3 fallback tiers \u00d7 10-20s each
-        // could still add up to 10-20+ minutes worst case when many calls are
-        // slow/timing out one after another — nothing was technically "hung,"
-        // but it felt exactly like never finishing. This hard overall deadline
-        // guarantees the search always completes within a fixed, predictable
-        // time: whatever's been found by then gets shown; anything still mid-flight
-        // simply keeps its platform-apply status instead of blocking forever.
-        var progress = { list: list };
-        var deadlineFired = false;
-        var overallDeadline = setTimeout(function(){
-          deadlineFired = true;
-          // Real gap found via user report: if the deadline fires before ever
-          // reaching enrichWithHunterEmail (stuck upstream in Anymail/backend-
-          // extract/page-scan instead), that function's own diagnostic message
-          // never gets written — leaving total silence even though results DID
-          // show. This guarantees SOME honest note always appears.
-          window.__hunterDebug = 'Email search: did not finish within 90s (stuck before reaching the domain/Hunter stage) — showing best-effort results';
-          finishProcessing(progress.list, widened);
-        }, 90000); // raised from 45s: today's fixes made the pipeline properly
-        // thorough (real domain search + validation + root-domain normalization
-        // per candidate) instead of failing fast, which legitimately needs more
-        // real time — 45s was sized for the old, less-correct version
-        // Real structural fix for the confirmed, persistent zero-results
-        // problem: Hunter/Prospeo/RapidAPI-finder ran only AFTER Anymail and
-        // page-scan finished, so the 90s deadline consistently fired before
-        // it ever got a turn at all — confirmed across many real searches
-        // today. Running all three together gives every stage a real, fair
-        // shot within the same time budget instead of the first two starving
-        // the third out entirely. Real tradeoff accepted: some candidates
-        // might get worked on by more than one stage simultaneously (all
-        // three see the same "no email yet" state at the start) — a little
-        // redundant effort is far better than a stage that never runs.
-        Promise.all([enrichWithAnymail(list), findCompanyThenEmail(list), enrichWithHunterEmail(list)]).then(function(){
-        progress.list = list;
-        clearTimeout(overallDeadline);
-        if(!deadlineFired) finishProcessing(list, widened);
-        });
-      }
-      function finishProcessing(list, widened, isPreview){
-        if(myGen !== searchGen) return; // a newer search has already started — this one's results are stale, don't overwrite
-        if(finishProcessing._done && finishProcessing._doneGen === myGen) return; // the deadline already rendered for this search — don't render twice
-        finishProcessing._done = true; finishProcessing._doneGen = myGen;
-        var lastResortGuesses = applyLastResortEmailGuess(list); // see this function's own comment — catches every job the capped pipeline above never got to
-        list.forEach(function(j){ j.score = scoreJob(j); j.days = j.date ? daysAgo(j.date) : null; });
-        list.sort(function(a,b){ return (b.score - a.score) || ((a.days==null?15:a.days) - (b.days==null?15:b.days)); });
-        list = applyLocationMix(list); // real ask: 70% in-country / 30% MENA+remote in the visible order — reorders, never hides anything
-        logRelevanceDiagnostics(list); // spec point 11 — real, inspectable reason for every job's match/non-match, logged once the final order is set
-        list.forEach(function(j){ j.applicationMethod = j.email ? 'email' : 'platform'; });
-        // Pinpointing exactly which filter accounts for the 40\u219227 HireLebanese
-        // drop reported by the user — tracking the count through each of the
-        // two filters that run before the existing merge/dedup checkpoint.
-        var hlAtStart = list.filter(function(j){ return j.src && j.src.indexOf('HireLebanese')===0; }).length;
-        var beforePayFilter = list.length;
-        list = list.filter(function(j){ return !isPayToApply(j); });
-        var payFiltered = beforePayFilter - list.length;
-        var hlAfterPayFilter = list.filter(function(j){ return j.src && j.src.indexOf('HireLebanese')===0; }).length;
-        // Naukrigulf: excluded entirely — its own account-creation flow is
-        // the exact kind of high-friction wall Hiraxia is built to avoid.
-        var beforeExclude = list.length;
-        list = list.filter(function(j){ return !/naukrigulf/i.test(j.src||''); });
-        var excludedCount = beforeExclude - list.length;
-        var hlAfterNaukrigulfFilter = list.filter(function(j){ return j.src && j.src.indexOf('HireLebanese')===0; }).length;
-        window.__hlEarlyTrace = 'HireLebanese early trace: at-start='+hlAtStart+', after-payFilter='+hlAfterPayFilter+', after-naukrigulfFilter='+hlAfterNaukrigulfFilter;
-        console.log(window.__hlEarlyTrace);
-        // Temporary targeted diagnostic — testing a specific hypothesis: is
-        // cross-listing dedup (same title+company) collapsing many of
-        // HireLebanese's raw results before the source-guarantee ever sees
-        // them? If the "before" count here is much higher than what
-        // capWithSourceGuarantee later reports, that confirms it.
-        var hlBeforeMerge = list.filter(function(j){ return j.src && j.src.indexOf('HireLebanese')===0; }).length;
-        allJobs = mergeWithPreviousResults(list, q); // merged with prior results — but only when re-searching roughly the same thing; see mergeWithPreviousResults for why
-        var hlAfterMerge = allJobs.filter(function(j){ return j.src && j.src.indexOf('HireLebanese')===0; }).length;
-        allJobs.forEach(function(j){ j.score = scoreJob(j); j.days = j.date ? daysAgo(j.date) : null; }); // re-score AND re-freshness-check every job in the merged pool, not just this batch — a carried-over job needs its "Xd ago" label to reflect real elapsed time, not whatever it was when first found
-        allJobs = capWithSourceGuarantee(allJobs, 100, [{src:'HireLebanese', min:30}, {src:'WebSearch', min:30}, {src:'AI-Discovery', min:40}]); // top 100 overall — AI-Discovery gets the largest protected minimum per explicit request, HireLebanese/WebSearch still protected too
-        var hlAfterCap = allJobs.filter(function(j){ return j.src && j.src.indexOf('HireLebanese')===0; }).length;
-        window.__hlCountTrace = 'HireLebanese count trace: before-merge='+hlBeforeMerge+', after-dedup='+hlAfterMerge+', after-guarantee='+hlAfterCap;
-        console.log(window.__hlCountTrace);
-        allJobs = markAppliedJobs(allJobs);
-        // Real gap found via user report: results only lived in page memory,
-        // so a refresh or return visit wiped everything. Saving here so they
-        // persist until a new search runs or the user clears their browser
-        // data themselves - standard expectation for a web app.
+
+        var rawJobsCount = jobs.length; // before dedup — total raw jobs across every source, duplicates included
+        // Real bug found via user report: US-namesake jobs (Lebanon, Ohio /
+        // Lebanon, Indiana) arrive tagged loc "LB" from GoogleJobs with the
+        // real US location only visible in the title. Marked ONCE here, at
+        // the single point every source's results converge, so every
+        // downstream geo check (scoring, view filters, MENA widening) sees
+        // the same answer instead of each re-deriving it from a loc string
+        // that has already lost the evidence.
+        jobs.forEach(function(j){ if(jobIsUsNamesake(j)) j.usNamesake = true; });
+        jobs = dedupeJobs(jobs).filter(function(j){ return !j.date || daysAgo(j.date) <= 20; });
+        var uniqueJobsCount = jobs.length; // after dedup, still includes off-field "stretch" fillers at this point
+
+        // Real audit deliverable: "Initial sources: X jobs" in the single-
+        // search diagnostic is a number that only ever existed client-side
+        // — the backend has no visibility into it at all. Reported once,
+        // fire-and-forget, right at the point where the combined source
+        // pool is final but before any AI enrichment has touched it.
         try{
-          localStorage.setItem('hiraxia_savedResults', JSON.stringify({
-            jobs: allJobs, okSources: okSources, srcNames: srcNames, savedAt: Date.now()
-          }));
-        }catch(e){ console.log('Could not save results locally:', e); }
-        // keep a lightweight search-history entry (query/country/count only,
-        // not the full listings — those go stale in days) and push it to the
-        // account if signed in
-        try{
-          var hist = [];
-          try{ hist = JSON.parse(lsGet('hiraxia_searchHistory') || '[]'); }catch(e2){ hist = []; }
-          hist.push({ query: q, country: c.label || c.v, count: allJobs.length, at: Date.now() });
-          hist = hist.slice(-20); // keep the most recent 20 only
-          lsSet('hiraxia_searchHistory', JSON.stringify(hist));
-          if(typeof syncToBackend === 'function') syncToBackend({ searches: hist });
-        }catch(e3){}
-        if(payFiltered > 0){ console.log('Filtered out', payFiltered, 'listing(s) requesting payment to apply'); }
-        if(excludedCount > 0){ console.log('Filtered out', excludedCount, 'Naukrigulf listing(s) by user preference'); }
+          var base0 = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
+          fetch(base0+'/ai-search-marker', {
+            method:'POST', headers: backendHeaders({'Content-Type':'application/json'}),
+            body: JSON.stringify({ searchSessionId: searchSessionId, query: q, location: c.label||c.v, initialJobCount: uniqueJobsCount })
+          }).catch(function(){});
+        }catch(e){}
 
-        renderJobs(okSources, srcNames);
-        // Broader than lastResortGuesses alone: covers every HireLebanese/
-        // WebSearch job still missing a real, confirmed email at this point
-        // — not just the subset that happened to get a weak guess. A job
-        // that got skipped by findCompanyThenEmail's own candidate cap
-        // entirely (no guess attempted at all) still deserves a real
-        // page-scan attempt. WebSearch results in particular NEED this,
-        // since Serper only ever returns a title/snippet, never a real
-        // email on its own — the actual email only ever comes from reading
-        // the real page directly, same as the proven HireLebanese approach.
-        var hlStillNeedsRealScan = allJobs.filter(function(j){
-          return j.src && j.src.indexOf('HireLebanese')===0 && (!j.email || j.emailPredicted);
-        });
-        var wsStillNeedsRealScan = allJobs.filter(function(j){
-          return j.src && j.src.indexOf('WebSearch')===0 && (!j.email || j.emailPredicted);
-        });
-        // Daleel Madani's listing page gives no company/email at all —
-        // its job pages are the real source, same principle as WebSearch
-        // (Serper only returns a snippet, the actual email lives on the
-        // real page). NGO postings on this kind of site very commonly
-        // print a direct "send CV to X@Y.org" instruction in the body.
-        var daleelStillNeedsRealScan = allJobs.filter(function(j){
-          return j.src && j.src.indexOf('Daleel Madani')===0 && (!j.email || j.emailPredicted);
-        });
-        Promise.all([
-          backgroundPageScanBySource(hlStillNeedsRealScan, 'HireLebanese'),
-          backgroundPageScanBySource(wsStillNeedsRealScan, 'WebSearch'),
-          backgroundPageScanBySource(daleelStillNeedsRealScan, 'Daleel Madani')
-        ]).then(function(){
-          // Real ask: AI title classification runs FIRST in this chain,
-          // before email enrichment — jobs it promotes from "different
-          // field" to relevant should then correctly benefit from the
-          // existing relevant-first prioritization in AI research below,
-          // not be treated as already-decided by the time enrichment runs.
-          classifyUnknownTitles(allJobs).then(function(){
-            // Second layer specifically for WebSearch, per explicit quality
-            // target: only fires for whatever still has no email after the
-            // job's-own-page scan above — tries the company's real domain +
-            // real site next, rather than settling for a weak guess.
-            return deepEnrichWebSearchJobs(allJobs);
-          }).then(function(){
-            // Last layer, only reached for whatever every deterministic
-            // layer above still couldn't find an email for. Genuinely
-            // zero-cost when OPENAI_RESEARCH_ENABLED is off — the backend
-            // returns instantly. Respects shadow mode entirely on its own.
-            return runAiResearch(allJobs, 'search_'+Date.now(), searchSessionId);
-          }).then(function(){
-            buildProductionDiagnosticReport(allJobs, rawJobsCount, uniqueJobsCount);
-            finalizeDiagLine(); // the one, true end of the pipeline — reveals the complete diagnostic in a single stable update, replacing the "still working" placeholder
+        function processAndFinish(list, widened){
+          if(c.keys.length){
+            if(c.mena){ list = list.filter(function(j){ return !j.usNamesake && (geoMatchStrict(j.loc, c) || menaMatch(j.loc) || (isRemoteish(j.loc) && !isFakeRemote(j))); }); }
+          }
+          // catch any job whose real apply method is actually email, buried in its own
+          // description text — not just jobs where a source API gave us a clean field
+          list.forEach(function(j){
+            if(!j.email){
+              var found = extractEmailFromText(j.desc) || extractEmailFromText(j.title);
+              if(found) j.email = found;
+            }
           });
-          backgroundVerifyLastResortGuesses(lastResortGuesses); // quiet upgrade pass for whatever's left — see its own comment for why this happens after render, not before
-          // Real ask: "take its time until at least 25 jobs with real
-          // emails" — fired here as a genuinely independent background
-          // task, NOT chained into the pipeline above. It can keep running
-          // for several minutes after everything else has already
-          // finished and finalizeDiagLine() has already revealed the
-          // "final" diagnostic — its own progress updates still show up
-          // live as they arrive (appendDiagLine correctly handles this:
-          // once __searchInProgress is false, every new line updates the
-          // screen immediately, exactly the real-time visibility this
-          // specific long-running task needs). Harmless, instant no-op
-          // when AI_DISCOVERY_ENABLED is off on the backend.
-          // Real ask: give AI-Discovery the same multi-city breadth
-          // deepScan already has (CITY_FANOUT), rather than only ever
-          // searching whatever single location is currently selected.
-          startAsyncDiscovery(q, curCity() || c.gj || '', 25, CITY_FANOUT[c.v] || [], searchSessionId);
-          // Real ask: give the SAME safe async treatment to upgrading
-          // predicted emails on EXISTING relevant jobs, not just finding
-          // NEW ones — genuinely independent, no timeout ceiling, runs
-          // alongside deep discovery above.
-          startAsyncEnrichment(allJobs, searchSessionId);
-        });
-        setTimeout(autoDiscoverFromResults, 400); // quiet background check, never blocks the UI
-        if(fails.length){
-          appendDiagLine(fails.join(' \u00b7 '));
+          // Upgrade the company field from the description text itself when it's
+          // missing, generic ("Private Company"), or is just the aggregator's own
+          // brand (e.g. bebee.com listings that never filled in a real company name).
+          // Doing this BEFORE the email-finder chain below means Anymail/Hunter/Prospeo
+          // search for the REAL employer from the first attempt, not as a late fix.
+          list.forEach(function(j){
+            // Real bug found via user report: "Job Description Roles &
+            // Responsibilities CBM" was being used as a company name -
+            // clearly a section-header fragment from the posting itself, not
+            // an actual organization name. Added detection for this pattern
+            // alongside the existing checks.
+            var looksLikeBoilerplate = j.company && /\b(job description|roles?\s*&?\s*responsibilities|requirements|qualifications|job summary|about (the|this) (role|position|job)|key responsibilities)\b/i.test(j.company);
+            var bad = !j.company || j.company.length<2 || /^(private company|confidential|client of|undisclosed)/i.test(j.company) || AGGREGATOR_BRAND_WORDS.test(j.company) || looksLikeBoilerplate;
+            if(bad){
+              var realName = extractCompanyFromDescription(j.desc, j.company);
+              if(realName) j.company = realName;
+              // Real bug found via user report: "WUZZUF" and similar job-board
+              // brand names kept showing up as if they were the actual employer,
+              // repeatedly, across many searches. Root cause: when re-extraction
+              // above fails to find a real name, the known-wrong aggregator name
+              // was left in place and used for the entire rest of the pipeline —
+              // wasting an Anymail attempt and a domain search on "WUZZUF's
+              // website" instead of ever trying to find the real employer. Clear
+              // it instead, so the job is correctly treated as "no reliable
+              // company name" — findCompanyThenEmail's own JSON-LD-based name
+              // extraction (reading the job's own page later) still gets a real
+              // chance to find the true name independently.
+              else j.company = '';
+            }
+            // New source (RemoteJobs.org) hands us the company's real website
+            // directly, verified by the source itself — store it as a known
+            // domain so the email-finding stages can skip the entire fragile
+            // domain-search step (Tavily/Brave/DuckDuckGo) for these jobs,
+            // going straight to scanning the real site.
+            if(j.companyWebsite && !j.knownDomain){
+              try{
+                var wsHost = new URL(j.companyWebsite).hostname.replace(/^www\./,'');
+                // Real gap found via user report: this shortcut skips the whole
+                // domain-search chain (and its aggregator-blocklist check) for
+                // speed, but that meant the source's OWN domain could slip
+                // through untouched if its "company website" field ever fell
+                // back to itself for an incomplete listing (confirmed: two
+                // "remotejobs.org" jobs reached Hunter with remotejobs.org
+                // itself as the target). Same guard used everywhere else.
+                if(!/^(remotejobs\.org|himalayas\.app)$/i.test(wsHost)) j.knownDomain = wsHost;
+              }catch(e){}
+            }
+          });
+          // BUG FIX: enrichment (Tavily/Hunter/screenshot) used to run on the RAW,
+          // unsorted API order — meaning the limited "top 10" candidate slots could
+          // go to low-relevance jobs while a genuinely top-matching job got skipped
+          // entirely. This preliminary sort (by relevance only, ignoring email status
+          // since it isn't finalized yet) ensures the real top matches get enrichment
+          // priority. finishProcessing() below still re-sorts with the full score
+          // (including the email bonus) for final display accuracy.
+          list.forEach(function(j){ j.score = scoreJob(j); });
+          list.sort(function(a,b){ return b.score - a.score; });
+          // Hiraxia's whole point is email-apply only — no showing platform-apply
+          // jobs while emails are still being searched. Wait for the full chain,
+          // then finishProcessing() filters to email-only before ever rendering.
+          setThinking('Found the roles — now finding real recruiter emails for each one\u2026', 70);
+          // Real gap found via user report: even with a timeout on EVERY individual
+          // network call, up to 20 jobs \u00d7 up to 3 fallback tiers \u00d7 10-20s each
+          // could still add up to 10-20+ minutes worst case when many calls are
+          // slow/timing out one after another — nothing was technically "hung,"
+          // but it felt exactly like never finishing. This hard overall deadline
+          // guarantees the search always completes within a fixed, predictable
+          // time: whatever's been found by then gets shown; anything still mid-flight
+          // simply keeps its platform-apply status instead of blocking forever.
+          var progress = { list: list };
+          var deadlineFired = false;
+          var overallDeadline = setTimeout(function(){
+            deadlineFired = true;
+            // Real gap found via user report: if the deadline fires before ever
+            // reaching enrichWithHunterEmail (stuck upstream in Anymail/backend-
+            // extract/page-scan instead), that function's own diagnostic message
+            // never gets written — leaving total silence even though results DID
+            // show. This guarantees SOME honest note always appears.
+            window.__hunterDebug = 'Email search: did not finish within 90s (stuck before reaching the domain/Hunter stage) — showing best-effort results';
+            finishProcessing(progress.list, widened);
+          }, 90000); // raised from 45s: today's fixes made the pipeline properly
+          // thorough (real domain search + validation + root-domain normalization
+          // per candidate) instead of failing fast, which legitimately needs more
+          // real time — 45s was sized for the old, less-correct version
+          // Real structural fix for the confirmed, persistent zero-results
+          // problem: Hunter/Prospeo/RapidAPI-finder ran only AFTER Anymail and
+          // page-scan finished, so the 90s deadline consistently fired before
+          // it ever got a turn at all — confirmed across many real searches
+          // today. Running all three together gives every stage a real, fair
+          // shot within the same time budget instead of the first two starving
+          // the third out entirely. Real tradeoff accepted: some candidates
+          // might get worked on by more than one stage simultaneously (all
+          // three see the same "no email yet" state at the start) — a little
+          // redundant effort is far better than a stage that never runs.
+          Promise.all([enrichWithAnymail(list), findCompanyThenEmail(list), enrichWithHunterEmail(list)]).then(function(){
+          progress.list = list;
+          clearTimeout(overallDeadline);
+          if(!deadlineFired) finishProcessing(list, widened);
+          });
         }
-        if(window.__backendExtractDebug){
-          appendDiagLine(window.__backendExtractDebug);
-        }
-        if(window.__hunterDebug){
-          var sl2 = document.getElementById('srcLine');
-          sl2.textContent = (sl2.textContent ? sl2.textContent+' \u00b7 ' : '') + window.__hunterDebug;
-        }
-        if(window.__pageScanDebug){
-          var sl3 = document.getElementById('srcLine');
-          sl3.textContent = (sl3.textContent ? sl3.textContent+' \u00b7 ' : '') + window.__pageScanDebug;
-        }
-        if(window.__braveDebug){
-          var sl5 = document.getElementById('srcLine');
-          sl5.textContent = (sl5.textContent ? sl5.textContent+' \u00b7 ' : '') + window.__braveDebug;
-        }
-        if(window.__anymailDebug){
-          var sl6 = document.getElementById('srcLine');
-          sl6.textContent = (sl6.textContent ? sl6.textContent+' \u00b7 ' : '') + window.__anymailDebug;
-        }
-        if(window.__ddgDebug){
-          var sl7 = document.getElementById('srcLine');
-          sl7.textContent = (sl7.textContent ? sl7.textContent+' \u00b7 ' : '') + window.__ddgDebug;
-        }
-        if(window.__screenshotDebug){
-          var sl4 = document.getElementById('srcLine');
-          sl4.textContent = (sl4.textContent ? sl4.textContent+' \u00b7 ' : '') + window.__screenshotDebug;
-        }
-        if(window.__hlCountTrace){
-          var sl8 = document.getElementById('srcLine');
-          sl8.textContent = (sl8.textContent ? sl8.textContent+' \u00b7 ' : '') + window.__hlCountTrace;
-        }
-        if(window.__hlEarlyTrace){
-          var sl9 = document.getElementById('srcLine');
-          sl9.textContent = (sl9.textContent ? sl9.textContent+' \u00b7 ' : '') + window.__hlEarlyTrace;
-        }
-        if(window.__hlLastResortTrace){
-          var sl10 = document.getElementById('srcLine');
-          sl10.textContent = (sl10.textContent ? sl10.textContent+' \u00b7 ' : '') + window.__hlLastResortTrace;
-        }
-        btn.disabled = false; btn.textContent = 'Find Fresh Jobs Now';
-        if(window.__hiraxiaExcite) window.__hiraxiaExcite(0.3);
+        function finishProcessing(list, widened, isPreview){
+          if(myGen !== searchGen) return; // a newer search has already started — this one's results are stale, don't overwrite
+          if(finishProcessing._done && finishProcessing._doneGen === myGen) return; // the deadline already rendered for this search — don't render twice
+          finishProcessing._done = true; finishProcessing._doneGen = myGen;
+          var lastResortGuesses = applyLastResortEmailGuess(list); // see this function's own comment — catches every job the capped pipeline above never got to
+          list.forEach(function(j){ j.score = scoreJob(j); j.days = j.date ? daysAgo(j.date) : null; });
+          list.sort(function(a,b){ return (b.score - a.score) || ((a.days==null?15:a.days) - (b.days==null?15:b.days)); });
+          list = applyLocationMix(list); // real ask: 70% in-country / 30% MENA+remote in the visible order — reorders, never hides anything
+          logRelevanceDiagnostics(list); // spec point 11 — real, inspectable reason for every job's match/non-match, logged once the final order is set
+          list.forEach(function(j){ j.applicationMethod = j.email ? 'email' : 'platform'; });
+          // Pinpointing exactly which filter accounts for the 40\u219227 HireLebanese
+          // drop reported by the user — tracking the count through each of the
+          // two filters that run before the existing merge/dedup checkpoint.
+          var hlAtStart = list.filter(function(j){ return j.src && j.src.indexOf('HireLebanese')===0; }).length;
+          var beforePayFilter = list.length;
+          list = list.filter(function(j){ return !isPayToApply(j); });
+          var payFiltered = beforePayFilter - list.length;
+          var hlAfterPayFilter = list.filter(function(j){ return j.src && j.src.indexOf('HireLebanese')===0; }).length;
+          // Naukrigulf: excluded entirely — its own account-creation flow is
+          // the exact kind of high-friction wall Hiraxia is built to avoid.
+          var beforeExclude = list.length;
+          list = list.filter(function(j){ return !/naukrigulf/i.test(j.src||''); });
+          var excludedCount = beforeExclude - list.length;
+          var hlAfterNaukrigulfFilter = list.filter(function(j){ return j.src && j.src.indexOf('HireLebanese')===0; }).length;
+          window.__hlEarlyTrace = 'HireLebanese early trace: at-start='+hlAtStart+', after-payFilter='+hlAfterPayFilter+', after-naukrigulfFilter='+hlAfterNaukrigulfFilter;
+          console.log(window.__hlEarlyTrace);
+          // Temporary targeted diagnostic — testing a specific hypothesis: is
+          // cross-listing dedup (same title+company) collapsing many of
+          // HireLebanese's raw results before the source-guarantee ever sees
+          // them? If the "before" count here is much higher than what
+          // capWithSourceGuarantee later reports, that confirms it.
+          var hlBeforeMerge = list.filter(function(j){ return j.src && j.src.indexOf('HireLebanese')===0; }).length;
+          allJobs = mergeWithPreviousResults(list, q); // merged with prior results — but only when re-searching roughly the same thing; see mergeWithPreviousResults for why
+          var hlAfterMerge = allJobs.filter(function(j){ return j.src && j.src.indexOf('HireLebanese')===0; }).length;
+          allJobs.forEach(function(j){ j.score = scoreJob(j); j.days = j.date ? daysAgo(j.date) : null; }); // re-score AND re-freshness-check every job in the merged pool, not just this batch — a carried-over job needs its "Xd ago" label to reflect real elapsed time, not whatever it was when first found
+          allJobs = capWithSourceGuarantee(allJobs, 100, [{src:'HireLebanese', min:30}, {src:'WebSearch', min:30}, {src:'AI-Discovery', min:40}]); // top 100 overall — AI-Discovery gets the largest protected minimum per explicit request, HireLebanese/WebSearch still protected too
+          var hlAfterCap = allJobs.filter(function(j){ return j.src && j.src.indexOf('HireLebanese')===0; }).length;
+          window.__hlCountTrace = 'HireLebanese count trace: before-merge='+hlBeforeMerge+', after-dedup='+hlAfterMerge+', after-guarantee='+hlAfterCap;
+          console.log(window.__hlCountTrace);
+          allJobs = markAppliedJobs(allJobs);
+          // Real gap found via user report: results only lived in page memory,
+          // so a refresh or return visit wiped everything. Saving here so they
+          // persist until a new search runs or the user clears their browser
+          // data themselves - standard expectation for a web app.
+          try{
+            localStorage.setItem('hiraxia_savedResults', JSON.stringify({
+              jobs: allJobs, okSources: okSources, srcNames: srcNames, savedAt: Date.now()
+            }));
+          }catch(e){ console.log('Could not save results locally:', e); }
+          // keep a lightweight search-history entry (query/country/count only,
+          // not the full listings — those go stale in days) and push it to the
+          // account if signed in
+          try{
+            var hist = [];
+            try{ hist = JSON.parse(lsGet('hiraxia_searchHistory') || '[]'); }catch(e2){ hist = []; }
+            hist.push({ query: q, country: c.label || c.v, count: allJobs.length, at: Date.now() });
+            hist = hist.slice(-20); // keep the most recent 20 only
+            lsSet('hiraxia_searchHistory', JSON.stringify(hist));
+            if(typeof syncToBackend === 'function') syncToBackend({ searches: hist });
+          }catch(e3){}
+          if(payFiltered > 0){ console.log('Filtered out', payFiltered, 'listing(s) requesting payment to apply'); }
+          if(excludedCount > 0){ console.log('Filtered out', excludedCount, 'Naukrigulf listing(s) by user preference'); }
 
-        var fresh = allJobs.filter(function(j){ return j.days!=null && j.days<=7; }).length;
-        var inCountry = c.keys.length ? allJobs.filter(function(j){ return geoMatchStrict(j.loc, c); }).length : 0;
-        var inMena = (c.mena) ? allJobs.filter(function(j){ return !geoMatchStrict(j.loc, c) && menaMatch(j.loc); }).length : 0;
-        setThinking('Found '+allJobs.length+' current openings across '+okSources+' live sources ('+fresh+' posted this week).', 100);
-        document.getElementById('bubScan').textContent = okSources+' sources live';
-        document.getElementById('bubTrack').textContent = contacted + ' contacted';
-        var bestPct = allJobs.length ? Math.min(98, 60 + allJobs[0].score*4) : 0;
-        document.getElementById('bubMatchPct').textContent = bestPct ? bestPct+'%' : '—';
-        document.getElementById('bubMatchBar').style.width = bestPct+'%';
+          renderJobs(okSources, srcNames);
+          // Broader than lastResortGuesses alone: covers every HireLebanese/
+          // WebSearch job still missing a real, confirmed email at this point
+          // — not just the subset that happened to get a weak guess. A job
+          // that got skipped by findCompanyThenEmail's own candidate cap
+          // entirely (no guess attempted at all) still deserves a real
+          // page-scan attempt. WebSearch results in particular NEED this,
+          // since Serper only ever returns a title/snippet, never a real
+          // email on its own — the actual email only ever comes from reading
+          // the real page directly, same as the proven HireLebanese approach.
+          var hlStillNeedsRealScan = allJobs.filter(function(j){
+            return j.src && j.src.indexOf('HireLebanese')===0 && (!j.email || j.emailPredicted);
+          });
+          var wsStillNeedsRealScan = allJobs.filter(function(j){
+            return j.src && j.src.indexOf('WebSearch')===0 && (!j.email || j.emailPredicted);
+          });
+          // Daleel Madani's listing page gives no company/email at all —
+          // its job pages are the real source, same principle as WebSearch
+          // (Serper only returns a snippet, the actual email lives on the
+          // real page). NGO postings on this kind of site very commonly
+          // print a direct "send CV to X@Y.org" instruction in the body.
+          var daleelStillNeedsRealScan = allJobs.filter(function(j){
+            return j.src && j.src.indexOf('Daleel Madani')===0 && (!j.email || j.emailPredicted);
+          });
+          Promise.all([
+            backgroundPageScanBySource(hlStillNeedsRealScan, 'HireLebanese'),
+            backgroundPageScanBySource(wsStillNeedsRealScan, 'WebSearch'),
+            backgroundPageScanBySource(daleelStillNeedsRealScan, 'Daleel Madani')
+          ]).then(function(){
+            // Real ask: AI title classification runs FIRST in this chain,
+            // before email enrichment — jobs it promotes from "different
+            // field" to relevant should then correctly benefit from the
+            // existing relevant-first prioritization in AI research below,
+            // not be treated as already-decided by the time enrichment runs.
+            classifyUnknownTitles(allJobs).then(function(){
+              // Second layer specifically for WebSearch, per explicit quality
+              // target: only fires for whatever still has no email after the
+              // job's-own-page scan above — tries the company's real domain +
+              // real site next, rather than settling for a weak guess.
+              return deepEnrichWebSearchJobs(allJobs);
+            }).then(function(){
+              // Last layer, only reached for whatever every deterministic
+              // layer above still couldn't find an email for. Genuinely
+              // zero-cost when OPENAI_RESEARCH_ENABLED is off — the backend
+              // returns instantly. Respects shadow mode entirely on its own.
+              return runAiResearch(allJobs, 'search_'+Date.now(), searchSessionId);
+            }).then(function(){
+              buildProductionDiagnosticReport(allJobs, rawJobsCount, uniqueJobsCount);
+              finalizeDiagLine(); // the one, true end of the pipeline — reveals the complete diagnostic in a single stable update, replacing the "still working" placeholder
+            });
+            backgroundVerifyLastResortGuesses(lastResortGuesses); // quiet upgrade pass for whatever's left — see its own comment for why this happens after render, not before
+            // Real ask: "take its time until at least 25 jobs with real
+            // emails" — fired here as a genuinely independent background
+            // task, NOT chained into the pipeline above. It can keep running
+            // for several minutes after everything else has already
+            // finished and finalizeDiagLine() has already revealed the
+            // "final" diagnostic — its own progress updates still show up
+            // live as they arrive (appendDiagLine correctly handles this:
+            // once __searchInProgress is false, every new line updates the
+            // screen immediately, exactly the real-time visibility this
+            // specific long-running task needs). Harmless, instant no-op
+            // when AI_DISCOVERY_ENABLED is off on the backend.
+            // Real ask: give AI-Discovery the same multi-city breadth
+            // deepScan already has (CITY_FANOUT), rather than only ever
+            // searching whatever single location is currently selected.
+            startAsyncDiscovery(q, curCity() || c.gj || '', 25, CITY_FANOUT[c.v] || [], searchSessionId);
+            // Real ask: give the SAME safe async treatment to upgrading
+            // predicted emails on EXISTING relevant jobs, not just finding
+            // NEW ones — genuinely independent, no timeout ceiling, runs
+            // alongside deep discovery above.
+            startAsyncEnrichment(allJobs, searchSessionId);
+          });
+          setTimeout(autoDiscoverFromResults, 400); // quiet background check, never blocks the UI
+          if(fails.length){
+            appendDiagLine(fails.join(' \u00b7 '));
+          }
+          if(window.__backendExtractDebug){
+            appendDiagLine(window.__backendExtractDebug);
+          }
+          if(window.__hunterDebug){
+            var sl2 = document.getElementById('srcLine');
+            sl2.textContent = (sl2.textContent ? sl2.textContent+' \u00b7 ' : '') + window.__hunterDebug;
+          }
+          if(window.__pageScanDebug){
+            var sl3 = document.getElementById('srcLine');
+            sl3.textContent = (sl3.textContent ? sl3.textContent+' \u00b7 ' : '') + window.__pageScanDebug;
+          }
+          if(window.__braveDebug){
+            var sl5 = document.getElementById('srcLine');
+            sl5.textContent = (sl5.textContent ? sl5.textContent+' \u00b7 ' : '') + window.__braveDebug;
+          }
+          if(window.__anymailDebug){
+            var sl6 = document.getElementById('srcLine');
+            sl6.textContent = (sl6.textContent ? sl6.textContent+' \u00b7 ' : '') + window.__anymailDebug;
+          }
+          if(window.__ddgDebug){
+            var sl7 = document.getElementById('srcLine');
+            sl7.textContent = (sl7.textContent ? sl7.textContent+' \u00b7 ' : '') + window.__ddgDebug;
+          }
+          if(window.__screenshotDebug){
+            var sl4 = document.getElementById('srcLine');
+            sl4.textContent = (sl4.textContent ? sl4.textContent+' \u00b7 ' : '') + window.__screenshotDebug;
+          }
+          if(window.__hlCountTrace){
+            var sl8 = document.getElementById('srcLine');
+            sl8.textContent = (sl8.textContent ? sl8.textContent+' \u00b7 ' : '') + window.__hlCountTrace;
+          }
+          if(window.__hlEarlyTrace){
+            var sl9 = document.getElementById('srcLine');
+            sl9.textContent = (sl9.textContent ? sl9.textContent+' \u00b7 ' : '') + window.__hlEarlyTrace;
+          }
+          if(window.__hlLastResortTrace){
+            var sl10 = document.getElementById('srcLine');
+            sl10.textContent = (sl10.textContent ? sl10.textContent+' \u00b7 ' : '') + window.__hlLastResortTrace;
+          }
+          btn.disabled = false; btn.textContent = 'Find Fresh Jobs Now';
+          if(window.__hiraxiaExcite) window.__hiraxiaExcite(0.3);
 
-        var cname = c.label.replace(/^[^ ]+ /,'');
-        if(c.keys.length && !gjWorked && !widened){
-          addMsg('Diagnosis — Google-for-Jobs (the main source with '+esc(cname)+' listings): <b>'+esc(gjError||'unknown failure')+'</b>. '+
-            (gjError.indexOf('rejected')>-1 ? 'Fix: re-copy the key from the X-RapidAPI-Key box on rapidapi.com and confirm the JSearch Pricing tab says you\u2019re on Basic.' :
-             gjError.indexOf('quota')>-1 ? 'Fix: the free monthly quota ran out — it resets monthly, or upgrade the JSearch plan.' :
-             gjError.indexOf('0 results')>-1 ? 'The key works! There are simply no fresh postings for this exact term — try broader like "accountant" or "finance".' :
-             'If it says network/CORS, your browser or network blocked the call — try Wi-Fi or another browser.') +
-            (allJobs.length? ' Meanwhile: '+allJobs.length+' roles below.':''),'bot');
-        } else if(allJobs.length){
-          var parts = [];
-          if(inCountry) parts.push('<b>'+inCountry+'</b> in '+esc(cname));
-          if(inMena) parts.push('<b>'+inMena+'</b> across the wider MENA region');
-          addMsg('<b>'+allJobs.length+'</b> '+(allJobs.length===1?'opportunity':'opportunities')+' detected'+(parts.length? ' — '+parts.join(', ')+', remainder remote-capable':'')+
-            ' ('+fresh+' within the last 7 cycles).'+(widened? ' Search radius expanded across MENA — local signal was weak.':'')+
-            ' Highest match: <b>'+esc(allJobs[0].title)+'</b>, '+esc(allJobs[0].company)+'.','bot');
-        } else {
-          addMsg((I18N[HRX_LANG]||I18N.en).msgNothingMatched.replace('{country}', esc(cname)),'bot');
+          var fresh = allJobs.filter(function(j){ return j.days!=null && j.days<=7; }).length;
+          var inCountry = c.keys.length ? allJobs.filter(function(j){ return geoMatchStrict(j.loc, c); }).length : 0;
+          var inMena = (c.mena) ? allJobs.filter(function(j){ return !geoMatchStrict(j.loc, c) && menaMatch(j.loc); }).length : 0;
+          setThinking('Found '+allJobs.length+' current openings across '+okSources+' live sources ('+fresh+' posted this week).', 100);
+          document.getElementById('bubScan').textContent = okSources+' sources live';
+          document.getElementById('bubTrack').textContent = contacted + ' contacted';
+          var bestPct = allJobs.length ? Math.min(98, 60 + allJobs[0].score*4) : 0;
+          document.getElementById('bubMatchPct').textContent = bestPct ? bestPct+'%' : '—';
+          document.getElementById('bubMatchBar').style.width = bestPct+'%';
+
+          var cname = c.label.replace(/^[^ ]+ /,'');
+          if(c.keys.length && !gjWorked && !widened){
+            addMsg('Diagnosis — Google-for-Jobs (the main source with '+esc(cname)+' listings): <b>'+esc(gjError||'unknown failure')+'</b>. '+
+              (gjError.indexOf('rejected')>-1 ? 'Fix: re-copy the key from the X-RapidAPI-Key box on rapidapi.com and confirm the JSearch Pricing tab says you\u2019re on Basic.' :
+               gjError.indexOf('quota')>-1 ? 'Fix: the free monthly quota ran out — it resets monthly, or upgrade the JSearch plan.' :
+               gjError.indexOf('0 results')>-1 ? 'The key works! There are simply no fresh postings for this exact term — try broader like "accountant" or "finance".' :
+               'If it says network/CORS, your browser or network blocked the call — try Wi-Fi or another browser.') +
+              (allJobs.length? ' Meanwhile: '+allJobs.length+' roles below.':''),'bot');
+          } else if(allJobs.length){
+            var parts = [];
+            if(inCountry) parts.push('<b>'+inCountry+'</b> in '+esc(cname));
+            if(inMena) parts.push('<b>'+inMena+'</b> across the wider MENA region');
+            addMsg('<b>'+allJobs.length+'</b> '+(allJobs.length===1?'opportunity':'opportunities')+' detected'+(parts.length? ' — '+parts.join(', ')+', remainder remote-capable':'')+
+              ' ('+fresh+' within the last 7 cycles).'+(widened? ' Search radius expanded across MENA — local signal was weak.':'')+
+              ' Highest match: <b>'+esc(allJobs[0].title)+'</b>, '+esc(allJobs[0].company)+'.','bot');
+          } else {
+            addMsg((I18N[HRX_LANG]||I18N.en).msgNothingMatched.replace('{country}', esc(cname)),'bot');
+          }
+          // Real bug found via user report: this used to auto-trigger the old,
+          // separate deepScan() function via setTimeout - redundant with
+          // autoCityFanout, which already handles city-sweeping properly as
+          // part of the same search chain (correct diagnostic appending, no
+          // duplicate GoogleJobs calls for the same cities). Removed - one
+          // city-sweep mechanism instead of two running redundantly.
         }
-        // Real bug found via user report: this used to auto-trigger the old,
-        // separate deepScan() function via setTimeout - redundant with
-        // autoCityFanout, which already handles city-sweeping properly as
-        // part of the same search chain (correct diagnostic appending, no
-        // duplicate GoogleJobs calls for the same cities). Removed - one
-        // city-sweep mechanism instead of two running redundantly.
-      }
 
-      var inCountryNow = c.keys.length ? jobs.filter(function(j){
-        return geoMatchStrict(j.loc, c) && relevanceScore(j).rel > 0;
-      }).length : 99;
-      if(gjWorked && c.keys.length && inCountryNow === 0){
-        // BUG FIX: this used to blame LOCATION unconditionally ("none matched Lebanon"),
-        // even when the real cause was zero ROLE relevance (e.g. a typo in the search
-        // term breaking every keyword match) — actively misleading, since location
-        // may have matched perfectly fine. Now it tells the truth about which one failed.
-        var locOnlyMatches = jobs.filter(function(j){ return geoMatchStrict(j.loc, c); }).length;
-        var reason = locOnlyMatches === 0
-          ? 'none of their locations matched '+esc(c.label.replace(/^[^ ]+ /,''))
-          : locOnlyMatches+' were actually in '+esc(c.label.replace(/^[^ ]+ /,''))+', but none matched the role you searched for — double-check the spelling of the job title';
-        addMsg('Transparency — GoogleJobs sent me '+gjRawLocs.length+' listings but their locations were: <i>'+gjRawLocs.map(esc).join(' \u00b7 ')+'</i> — '+reason+'. Retrying with a longer time window\u2026','bot');
-      }
-      // role-locked widening: same job, nearby countries — BEFORE any off-field local filler
-      function regionPass(base, alreadyWidened){
-        var inNow = c.keys.length ? base.filter(function(j){
+        var inCountryNow = c.keys.length ? jobs.filter(function(j){
           return geoMatchStrict(j.loc, c) && relevanceScore(j).rel > 0;
         }).length : 99;
-        var nb = neighborsOf(c);
-        var roleQ = document.getElementById('jobQuery').value.trim() || (cvSkills[0] || q || 'jobs');
-        // Local-first: every country (MENA included) stays local until results are
-        // genuinely thin, same rule across the board. Raised from 4 \u2192 12: search
-        // Lebanon thoroughly before ever touching the Gulf, per explicit product
-        // decision — the old "always widen for MENA" behavior undercut this by
-        // checking the region regardless of how much real local inventory existed.
-        var LOCAL_THIN_THRESHOLD = 12;
-        if(inNow >= LOCAL_THIN_THRESHOLD || !nb.length || !hasBackend()){ autoCityFanout(base, alreadyWidened); return; }
-        var alwaysCheckRegion = false;
-        var cname = c.label.replace(/^[^ ]+ /,'');
-        setThinking((alwaysCheckRegion ? 'Also checking the wider Gulf/MENA for ' : 'Few ')+roleQ+(alwaysCheckRegion?' roles\u2026':' roles in '+cname+' — widening the SAME role to nearby markets\u2026'), 80);
-        // query the top neighbors in parallel, role-locked — trimmed to 2 when this runs automatically every time, to keep credit use sane
-        var picks = nb.slice(0, alwaysCheckRegion ? 2 : 3);
-        // second engine, same neighbors: Jooble's country-specific hosts (ae.jooble.org etc.)
-        // — this pattern already works reliably (same as lb.jooble.org), no new dependency,
-        // no CORS risk, nothing new to test. More real Gulf coverage from an already-proven pipe.
-        var joobleGulfPromises = hasBackend() ? picks.map(function(n){ return sourceJooble(roleQ, n[0], n[1]); }) : [];
-        Promise.allSettled(picks.map(function(n){ return sourceGoogleJobs(roleQ, n[0], n[1]); }).concat(joobleGulfPromises))
-          .then(function(rs){
-            var extra = [];
-            var cityReport = [];
-            var gjCount = picks.length;
-            rs.slice(0, gjCount).forEach(function(r, i){
-              var rawN = r.status==='fulfilled' ? r.value.length : 0;
-              cityReport.push(picks[i][0]+': '+(r.status==='fulfilled' ? rawN+' raw' : 'FAILED('+(r.reason&&r.reason.message||'?')+')'));
-              console.log('Source: GoogleJobs·nearby['+roleQ+' @ '+picks[i][0]+']', 'Jobs found:', rawN);
-              if(r.status==='fulfilled') extra = extra.concat(r.value);
-            });
-            // Jooble's Gulf-country hosts, second engine on the same neighbor list
-            var joobleExtra = [];
-            rs.slice(gjCount).forEach(function(r, i){
-              var rawN = r.status==='fulfilled' ? r.value.length : 0;
-              cityReport.push('Jooble·'+picks[i][0]+': '+(r.status==='fulfilled' ? rawN+' raw' : 'FAILED'));
-              console.log('Source: Jooble·nearby['+roleQ+' @ '+picks[i][0]+']', 'Jobs found:', rawN);
-              if(r.status==='fulfilled') joobleExtra = joobleExtra.concat(r.value);
-            });
-            extra = extra.concat(joobleExtra);
-            var beforeDateFilter = extra.length;
-            extra = extra.filter(function(j){ return !j.date || daysAgo(j.date) <= 20; });
-            var afterDateFilter = extra.length;
-            extra.forEach(function(j){ j.nearbyRole = true; }); // same field, nearby country
-            if(extra.length){ okSources++; srcNames.push('Nearby-Gulf ('+extra.length+')'); }
-            var merged = dedupeJobs(base.concat(extra));
-            var relevantFound = extra.filter(function(j){ return relevanceScore(j).rel > 0; }).length;
-            addMsg('\ud83d\udd0d Scanning nearby sectors for &ldquo;'+esc(roleQ)+'&rdquo;\u2026 '+relevantFound+' matching '+(relevantFound===1?'signal':'signals')+' detected.','bot');
-            autoCityFanout(merged, true);
-          }).catch(function(){ autoCityFanout(base, alreadyWidened); });
-      }
-      // Unified with the standalone Deep Scan feature per explicit request:
-      // this now always sweeps the FULL city list (not just 3, not just
-      // when results look thin) as part of one single search, instead of
-      // requiring a separate button press and a separate, lesser pipeline
-      // that skipped email-finding entirely. Skips cleanly if JSearch's
-      // quota is already confirmed exhausted this session - no point
-      // waiting out guaranteed failures across many parallel calls.
-      function autoCityFanout(base, alreadyWidened){
-        var cities = CITY_FANOUT[c.v];
-        if(!cities || !hasBackend() || jsearchQuotaStillExceeded()){ remoteRolePass(base, alreadyWidened); return; }
-        var roleQ2 = document.getElementById('jobQuery').value.trim() || (cvSkills[0] || q || 'jobs');
-        var extraCities = cities.filter(function(city){ return city.toLowerCase().indexOf('beirut')===-1; }).slice(0, 4); // capped from full list - conserves quota on a fresh key until it's confirmed working
-        if(!extraCities.length){ remoteRolePass(base, alreadyWidened); return; }
-        setThinking('Deep scan: sweeping '+extraCities.length+' more '+esc(c.label.replace(/^[^ ]+ /,''))+' cities for '+roleQ2+' roles\u2026', 88);
-        var iso2 = (c.v==='sa2')?'sa':c.v;
-        Promise.allSettled(extraCities.map(function(city){ return sourceGoogleJobs(roleQ2, city, iso2); }))
-          .then(function(rs2){
-            var extra2 = [];
-            rs2.forEach(function(r){ if(r.status==='fulfilled') extra2 = extra2.concat(r.value); });
-            extra2 = extra2.filter(function(j){ return !j.date || daysAgo(j.date) <= 20; });
-            if(extra2.length){ okSources++; srcNames.push('GoogleJobs\u00b7city-sweep ('+extra2.length+')'); }
-            remoteRolePass(dedupeJobs(base.concat(extra2)), true);
-          }).catch(function(){ remoteRolePass(base, alreadyWidened); });
-      }
-      // final automatic tier: explicitly ask Google for "<role> remote" — the tech-focused
-      // remote boards (Remotive/Arbeitnow/RemoteOK) rarely carry accounting/finance/admin roles,
-      // so without this, "remote" results skew entirely toward developer/design jobs regardless
-      // of what the user actually does. One extra call, always worth it.
-      function remoteRolePass(base, alreadyWidened){
-        var roleQ3 = document.getElementById('jobQuery').value.trim() || (cvSkills[0] || q || 'jobs');
-        if(!hasBackend() || jsearchQuotaStillExceeded()){ processAndFinish(base, alreadyWidened); return; }
-        sourceGoogleJobs(roleQ3+' remote', '', '', true).then(function(res){
-          console.log('Source: GoogleJobs\u00b7remote-role['+roleQ3+' remote]', 'Jobs found:', res.length);
-          res = res.filter(function(j){ return !j.date || daysAgo(j.date) <= 20; });
-          var relevant = res.filter(function(j){ return relevanceScore(j).rel > 0; });
-          if(relevant.length){ okSources++; srcNames.push('GoogleJobs\u00b7remote-'+roleQ3.split(' ')[0]+' ('+relevant.length+')'); }
-          processAndFinish(dedupeJobs(base.concat(relevant)), alreadyWidened || relevant.length>0);
-        }).catch(function(){ processAndFinish(base, alreadyWidened); });
-      }
-      var gulfPass = regionPass; // back-compat alias
-      if(c.v==='lb' && inCountryNow < 4 && hasBackend()){
-        setThinking('Lebanon cascade: searching Beirut, Mount Lebanon and fallback queries\u2026', 65);
-        lebanonCascade(q, c).then(function(older){
-          if(older.length){ srcNames.push('GoogleJobs\u00b7LB-cascade ('+older.length+')'); }
-          gulfPass(dedupeJobs(jobs.concat(older)), older.length > 0);
-        }).catch(function(){ gulfPass(jobs, false); });
-      } else if(c.keys.length && inCountryNow < 4 && hasBackend()){
-        setThinking('Few recent in-country posts — retrying with a wider window\u2026', 65);
-        sourceGoogleJobs(q, c.gj, isoOf(c), true).then(function(older){
-          older = older.filter(function(j){ return !j.date || daysAgo(j.date) <= 20; });
-          if(older.length){ srcNames.push('GoogleJobs\u00b7retry ('+older.length+')'); }
-          regionPass(dedupeJobs(jobs.concat(older)), older.length > 0);
-        }).catch(function(){ regionPass(jobs, false); });
-      } else {
-        regionPass(jobs, false);
-      }
-    });
+        if(gjWorked && c.keys.length && inCountryNow === 0){
+          // BUG FIX: this used to blame LOCATION unconditionally ("none matched Lebanon"),
+          // even when the real cause was zero ROLE relevance (e.g. a typo in the search
+          // term breaking every keyword match) — actively misleading, since location
+          // may have matched perfectly fine. Now it tells the truth about which one failed.
+          var locOnlyMatches = jobs.filter(function(j){ return geoMatchStrict(j.loc, c); }).length;
+          var reason = locOnlyMatches === 0
+            ? 'none of their locations matched '+esc(c.label.replace(/^[^ ]+ /,''))
+            : locOnlyMatches+' were actually in '+esc(c.label.replace(/^[^ ]+ /,''))+', but none matched the role you searched for — double-check the spelling of the job title';
+          addMsg('Transparency — GoogleJobs sent me '+gjRawLocs.length+' listings but their locations were: <i>'+gjRawLocs.map(esc).join(' \u00b7 ')+'</i> — '+reason+'. Retrying with a longer time window\u2026','bot');
+        }
+        // role-locked widening: same job, nearby countries — BEFORE any off-field local filler
+        function regionPass(base, alreadyWidened){
+          var inNow = c.keys.length ? base.filter(function(j){
+            return geoMatchStrict(j.loc, c) && relevanceScore(j).rel > 0;
+          }).length : 99;
+          var nb = neighborsOf(c);
+          var roleQ = document.getElementById('jobQuery').value.trim() || (cvSkills[0] || q || 'jobs');
+          // Local-first: every country (MENA included) stays local until results are
+          // genuinely thin, same rule across the board. Raised from 4 \u2192 12: search
+          // Lebanon thoroughly before ever touching the Gulf, per explicit product
+          // decision — the old "always widen for MENA" behavior undercut this by
+          // checking the region regardless of how much real local inventory existed.
+          var LOCAL_THIN_THRESHOLD = 12;
+          if(inNow >= LOCAL_THIN_THRESHOLD || !nb.length || !hasBackend()){ autoCityFanout(base, alreadyWidened); return; }
+          var alwaysCheckRegion = false;
+          var cname = c.label.replace(/^[^ ]+ /,'');
+          setThinking((alwaysCheckRegion ? 'Also checking the wider Gulf/MENA for ' : 'Few ')+roleQ+(alwaysCheckRegion?' roles\u2026':' roles in '+cname+' — widening the SAME role to nearby markets\u2026'), 80);
+          // query the top neighbors in parallel, role-locked — trimmed to 2 when this runs automatically every time, to keep credit use sane
+          var picks = nb.slice(0, alwaysCheckRegion ? 2 : 3);
+          // second engine, same neighbors: Jooble's country-specific hosts (ae.jooble.org etc.)
+          // — this pattern already works reliably (same as lb.jooble.org), no new dependency,
+          // no CORS risk, nothing new to test. More real Gulf coverage from an already-proven pipe.
+          var joobleGulfPromises = hasBackend() ? picks.map(function(n){ return sourceJooble(roleQ, n[0], n[1]); }) : [];
+          Promise.allSettled(picks.map(function(n){ return sourceGoogleJobs(roleQ, n[0], n[1]); }).concat(joobleGulfPromises))
+            .then(function(rs){
+              var extra = [];
+              var cityReport = [];
+              var gjCount = picks.length;
+              rs.slice(0, gjCount).forEach(function(r, i){
+                var rawN = r.status==='fulfilled' ? r.value.length : 0;
+                cityReport.push(picks[i][0]+': '+(r.status==='fulfilled' ? rawN+' raw' : 'FAILED('+(r.reason&&r.reason.message||'?')+')'));
+                console.log('Source: GoogleJobs·nearby['+roleQ+' @ '+picks[i][0]+']', 'Jobs found:', rawN);
+                if(r.status==='fulfilled') extra = extra.concat(r.value);
+              });
+              // Jooble's Gulf-country hosts, second engine on the same neighbor list
+              var joobleExtra = [];
+              rs.slice(gjCount).forEach(function(r, i){
+                var rawN = r.status==='fulfilled' ? r.value.length : 0;
+                cityReport.push('Jooble·'+picks[i][0]+': '+(r.status==='fulfilled' ? rawN+' raw' : 'FAILED'));
+                console.log('Source: Jooble·nearby['+roleQ+' @ '+picks[i][0]+']', 'Jobs found:', rawN);
+                if(r.status==='fulfilled') joobleExtra = joobleExtra.concat(r.value);
+              });
+              extra = extra.concat(joobleExtra);
+              var beforeDateFilter = extra.length;
+              extra = extra.filter(function(j){ return !j.date || daysAgo(j.date) <= 20; });
+              var afterDateFilter = extra.length;
+              extra.forEach(function(j){ j.nearbyRole = true; }); // same field, nearby country
+              if(extra.length){ okSources++; srcNames.push('Nearby-Gulf ('+extra.length+')'); }
+              var merged = dedupeJobs(base.concat(extra));
+              var relevantFound = extra.filter(function(j){ return relevanceScore(j).rel > 0; }).length;
+              addMsg('\ud83d\udd0d Scanning nearby sectors for &ldquo;'+esc(roleQ)+'&rdquo;\u2026 '+relevantFound+' matching '+(relevantFound===1?'signal':'signals')+' detected.','bot');
+              autoCityFanout(merged, true);
+            }).catch(function(){ autoCityFanout(base, alreadyWidened); });
+        }
+        // Unified with the standalone Deep Scan feature per explicit request:
+        // this now always sweeps the FULL city list (not just 3, not just
+        // when results look thin) as part of one single search, instead of
+        // requiring a separate button press and a separate, lesser pipeline
+        // that skipped email-finding entirely. Skips cleanly if JSearch's
+        // quota is already confirmed exhausted this session - no point
+        // waiting out guaranteed failures across many parallel calls.
+        function autoCityFanout(base, alreadyWidened){
+          var cities = CITY_FANOUT[c.v];
+          if(!cities || !hasBackend() || jsearchQuotaStillExceeded()){ remoteRolePass(base, alreadyWidened); return; }
+          var roleQ2 = document.getElementById('jobQuery').value.trim() || (cvSkills[0] || q || 'jobs');
+          var extraCities = cities.filter(function(city){ return city.toLowerCase().indexOf('beirut')===-1; }).slice(0, 4); // capped from full list - conserves quota on a fresh key until it's confirmed working
+          if(!extraCities.length){ remoteRolePass(base, alreadyWidened); return; }
+          setThinking('Deep scan: sweeping '+extraCities.length+' more '+esc(c.label.replace(/^[^ ]+ /,''))+' cities for '+roleQ2+' roles\u2026', 88);
+          var iso2 = (c.v==='sa2')?'sa':c.v;
+          Promise.allSettled(extraCities.map(function(city){ return sourceGoogleJobs(roleQ2, city, iso2); }))
+            .then(function(rs2){
+              var extra2 = [];
+              rs2.forEach(function(r){ if(r.status==='fulfilled') extra2 = extra2.concat(r.value); });
+              extra2 = extra2.filter(function(j){ return !j.date || daysAgo(j.date) <= 20; });
+              if(extra2.length){ okSources++; srcNames.push('GoogleJobs\u00b7city-sweep ('+extra2.length+')'); }
+              remoteRolePass(dedupeJobs(base.concat(extra2)), true);
+            }).catch(function(){ remoteRolePass(base, alreadyWidened); });
+        }
+        // final automatic tier: explicitly ask Google for "<role> remote" — the tech-focused
+        // remote boards (Remotive/Arbeitnow/RemoteOK) rarely carry accounting/finance/admin roles,
+        // so without this, "remote" results skew entirely toward developer/design jobs regardless
+        // of what the user actually does. One extra call, always worth it.
+        function remoteRolePass(base, alreadyWidened){
+          var roleQ3 = document.getElementById('jobQuery').value.trim() || (cvSkills[0] || q || 'jobs');
+          if(!hasBackend() || jsearchQuotaStillExceeded()){ processAndFinish(base, alreadyWidened); return; }
+          sourceGoogleJobs(roleQ3+' remote', '', '', true).then(function(res){
+            console.log('Source: GoogleJobs\u00b7remote-role['+roleQ3+' remote]', 'Jobs found:', res.length);
+            res = res.filter(function(j){ return !j.date || daysAgo(j.date) <= 20; });
+            var relevant = res.filter(function(j){ return relevanceScore(j).rel > 0; });
+            if(relevant.length){ okSources++; srcNames.push('GoogleJobs\u00b7remote-'+roleQ3.split(' ')[0]+' ('+relevant.length+')'); }
+            processAndFinish(dedupeJobs(base.concat(relevant)), alreadyWidened || relevant.length>0);
+          }).catch(function(){ processAndFinish(base, alreadyWidened); });
+        }
+        var gulfPass = regionPass; // back-compat alias
+        if(c.v==='lb' && inCountryNow < 4 && hasBackend()){
+          setThinking('Lebanon cascade: searching Beirut, Mount Lebanon and fallback queries\u2026', 65);
+          lebanonCascade(q, c).then(function(older){
+            if(older.length){ srcNames.push('GoogleJobs\u00b7LB-cascade ('+older.length+')'); }
+            gulfPass(dedupeJobs(jobs.concat(older)), older.length > 0);
+          }).catch(function(){ gulfPass(jobs, false); });
+        } else if(c.keys.length && inCountryNow < 4 && hasBackend()){
+          setThinking('Few recent in-country posts — retrying with a wider window\u2026', 65);
+          sourceGoogleJobs(q, c.gj, isoOf(c), true).then(function(older){
+            older = older.filter(function(j){ return !j.date || daysAgo(j.date) <= 20; });
+            if(older.length){ srcNames.push('GoogleJobs\u00b7retry ('+older.length+')'); }
+            regionPass(dedupeJobs(jobs.concat(older)), older.length > 0);
+          }).catch(function(){ regionPass(jobs, false); });
+        } else {
+          regionPass(jobs, false);
+        }
+      });
+    }
+    // Always runs — backendWarm never rejects, so a genuinely dead
+    // backend still proceeds and reports honest per-source errors
+    // rather than leaving the UI hanging forever.
+    backendWarm.then(fireSources, fireSources);
   }
 
   /* ================= auto-growing discovery: learn from REAL companies in results ================= */
@@ -6344,9 +6627,10 @@
     }
     var c2 = curCountry();
     var view = allJobs.filter(function(j){
+      if(j.usNamesake) return false; // Lebanon, Ohio is not Lebanon — never shown for a Lebanon search, in any view
       if(geoView==='country') return geoMatchStrict(j.loc, c2);
       if(geoView==='mena') return menaMatch(j.loc) || geoMatchStrict(j.loc, c2);
-      if(geoView==='remote') return isRemoteish(j.loc);
+      if(geoView==='remote') return isRemoteish(j.loc) && !isFakeRemote(j); // a mislabeled on-site role isn't a real remote job — see isFakeRemote
       if(geoView==='email') return !!j.email;
       // Real bug found via user report: the "different field" section was
       // showing jobs from Dubai/Saudi Arabia/Canada/Brazil/etc. labeled
@@ -6356,7 +6640,7 @@
       // relevant NOR anywhere near the searched location has no honest
       // reason to be shown at all — this is the actual fix, not just a
       // relabel: genuinely unrelated-everything jobs are dropped here.
-      if(j.isStretch) return geoMatchStrict(j.loc, c2) || menaMatch(j.loc) || isRemoteish(j.loc);
+      if(j.isStretch) return geoMatchStrict(j.loc, c2) || menaMatch(j.loc) || (isRemoteish(j.loc) && !isFakeRemote(j));
       return true;
     });
     if(!view.length && allJobs.length){
@@ -6365,10 +6649,32 @@
       return;
     }
     var maxScore = Math.max.apply(null, allJobs.map(function(j){ return Math.max(j.score,1); })) || 1;
+    // Per the core product rule — the key metric is relevant jobs with a
+    // credible email, not job count. Within each relevance band, jobs
+    // that are actually email-ready come first, and jobs with no credible
+    // email get their own clearly-labelled section instead of diluting
+    // the main results. Relevance still outranks email-readiness: a
+    // perfect-match job with no email is more useful than an irrelevant
+    // one with an email, so this sorts WITHIN the existing bands rather
+    // than above them.
+    view = view.slice().sort(function(a,b){
+      var aS = a.isStretch?1:0, bS = b.isStretch?1:0;
+      if(aS !== bS) return aS - bS;                      // relevance band first
+      var aE = a.email?0:1, bE = b.email?0:1;
+      if(aE !== bE) return aE - bE;                      // then email-ready
+      return (b.score - a.score) || ((a.days==null?15:a.days) - (b.days==null?15:b.days));
+    });
     var firstStretchIdx = view.findIndex(function(j){ return j.isStretch; });
+    // First non-stretch job that has no credible email — the boundary of
+    // the "email not found" section within the relevant results.
+    var firstNoEmailIdx = view.findIndex(function(j){ return !j.isStretch && !j.email; });
     list.innerHTML = view.map(function(j, idx){
-      var divider = (idx === firstStretchIdx && firstStretchIdx > 0)
-        ? '<div class="src-line" style="margin:12px 0 6px; color:#c9a24b;">'+t('otherOpenings')+'</div>' : '';
+      var divider = '';
+      if(idx === firstStretchIdx && firstStretchIdx > 0){
+        divider = '<div class="src-line" style="margin:12px 0 6px; color:#c9a24b;">'+t('otherOpenings')+'</div>';
+      } else if(idx === firstNoEmailIdx && firstNoEmailIdx > 0){
+        divider = '<div class="src-line" style="margin:12px 0 6px; color:#8a93a6;">More jobs \u2014 no confirmed application email found yet</div>';
+      }
       var pct;
       if(j.isStretch){ pct = Math.max(8, Math.min(28, Math.round(15 + j.score*2))); } // stretch jobs: always visibly low
       else { pct = Math.max(30, Math.min(97, Math.round(30 + (Math.max(j.score,0)/maxScore)*67))); } // absolute-ish scale, no artificial floor for real matches
@@ -6379,7 +6685,18 @@
       else if(j.days<=14) freshTag = '<span class="tag">'+t('freshDaysAgo',{days:j.days})+'</span>';
       else freshTag = '<span class="tag warn">'+t('freshWarn',{days:j.days})+'</span>';
       var Lc = I18N[HRX_LANG] || I18N.en;
-      var emailTag = j.email ? (j.emailPredicted ? '<span class="tag" style="background:#5b3ff0;color:#fff;">&#128302; '+Lc.predictedEmailTag+'</span>' : '<span class="tag fresh">&#9993; '+Lc.emailApplyTag+'</span>') : '<span class="tag src">&#127760; '+Lc.platformApplyTag+'</span>';
+      // Per the product rule: only an evidence-backed email is ever
+      // shown as email-apply. A hypothesis is labelled as exactly what
+      // it is — an unconfirmed guess still being researched — and never
+      // borrows the credibility of a real result.
+      var emailTag;
+      if(j.email){
+        emailTag = '<span class="tag fresh">&#9993; '+Lc.emailApplyTag+'</span>';
+      } else if(j.predictedEmail){
+        emailTag = '<span class="tag" style="background:#5b3ff0;color:#fff;">&#128302; researching \u2014 no confirmed email yet</span>';
+      } else {
+        emailTag = '<span class="tag src">&#127760; '+Lc.platformApplyTag+'</span>';
+      }
       var salTag = j.salary ? '<span class="tag">'+esc(String(j.salary).slice(0,26))+'</span>' : '';
       var typeTag = j.job_type ? '<span class="tag">'+esc(j.job_type)+'</span>' : '';
       var hayLC = (j.title+' '+j.desc).toLowerCase();
@@ -6599,12 +6916,12 @@
     document.getElementById('amCvMatchBtn').disabled = false;
     var gmailReady = !!((cvFile || lsGet('hiraxia_cvFileBase64')) && lsGet('hiraxia_gmailRefreshToken') && lsGet('hiraxia_gmailClientId'));
     document.getElementById('amToLabel').innerHTML = job.email
-      ? (job.emailPredicted
-          ? '&#9888;&#65039; <b style="color:#ffb84d">Predicted email, not confirmed:</b> <b style="color:#ffb84d">'+esc(job.email)+'</b>. This is a common-pattern guess based on the company\'s real domain — it may not be correct or monitored. Review carefully before sending.'
-          : (gmailReady
-              ? 'Recruiter email found: <b style="color:#8ef0c0">'+esc(job.email)+'</b>. On approval, this sends automatically from your own Gmail, with your CV already attached — no separate send step needed.'
-              : 'Recruiter email found: <b style="color:#8ef0c0">'+esc(job.email)+'</b>. On approval your email app opens addressed &amp; pre-filled — you attach your CV (\ud83d\udcce) and hit send. Connect Gmail in \u2699 settings to skip that manual step — CVs attach automatically once it\'s linked.'))
-      : 'This job applies on the company/board site — on approval I\'ll open the apply page and copy your message so you can paste it in.';
+      ? (gmailReady
+          ? 'Recruiter email found: <b style="color:#8ef0c0">'+esc(job.email)+'</b>'+(job.emailEvidence?' <span style="opacity:.75">(evidence: '+esc(String(job.emailEvidence).slice(0,120))+')</span>':'')+'. On approval, this sends automatically from your own Gmail, with your CV already attached — no separate send step needed.'
+          : 'Recruiter email found: <b style="color:#8ef0c0">'+esc(job.email)+'</b>'+(job.emailEvidence?' <span style="opacity:.75">(evidence: '+esc(String(job.emailEvidence).slice(0,120))+')</span>':'')+'. On approval your email app opens addressed &amp; pre-filled — you attach your CV (\ud83d\udcce) and hit send. Connect Gmail in \u2699 settings to skip that manual step — CVs attach automatically once it\'s linked.')
+      : (job.predictedEmail
+          ? 'No confirmed application email yet. We have an unverified guess (<b style="color:#ffb84d">'+esc(job.predictedEmail)+'</b>) that research could not back up with evidence, so it is deliberately NOT used to send. On approval I\'ll open the apply page and copy your message so you can paste it in.'
+          : 'This job applies on the company/board site — on approval I\'ll open the apply page and copy your message so you can paste it in.');
     document.getElementById('amMsg').value = 'Drafting your message…';
     document.getElementById('amQueue').textContent = applyQueue.length > 1
       ? 'Auto-apply queue: '+(queuePos+1)+' of '+applyQueue.length : '';
