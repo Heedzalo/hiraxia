@@ -534,6 +534,7 @@
         <div class="section-head"><h3 data-i18n="liveMatches">Live Job Matches</h3><button class="auto-apply-btn" id="autoApplyBtn" data-i18n="autoApplyTop3">&#9889; Auto-Apply Top 3</button></div>
         <div class="src-line" id="srcLine"></div>
         <button id="copyDiagBtn" data-i18n="copyFullDiag" style="display:none;margin:4px 0 8px;padding:5px 10px;font-size:12px;border-radius:6px;border:1px solid #444;background:#222;color:#ddd;cursor:pointer;">&#128203; Copy full diagnostics</button>
+        <button id="clearCacheBtn" style="display:none;margin:4px 0 8px 6px;padding:5px 10px;font-size:12px;border-radius:6px;border:1px solid #5a3a3a;background:#2a1c1c;color:#e5b4b4;cursor:pointer;">&#128465;&#65039; Clear cached results</button>
         <div class="geo-chips" id="geoChips">
           <button class="gchip active" data-g="all" data-i18n="chipAll">All</button>
           <button class="gchip" data-g="country" data-i18n="chipCountry">In-country</button>
@@ -6973,6 +6974,57 @@
     document.getElementById('srcLine').textContent = window.__searchInProgress
       ? window.__srcLineBase + ' \u00b7 finding emails and enriching results in the background\u2026'
       : window.__srcLineBase + (window.__extraDiagLines && window.__extraDiagLines.length ? ' \u00b7 '+window.__extraDiagLines.join(' \u00b7 ') : '');
+    // Clear-cache control, shown alongside the diagnostics button. Exists
+    // because several real bugs wrote WRONG data into caches that outlived
+    // the fix (an aggregator's address cached as an employer's, a
+    // wrong-city branch office, zero-job discovery results) — and the
+    // company cache is deliberately permanent, so without this there is no
+    // way to remove a bad entry at all.
+    var clearBtn = document.getElementById('clearCacheBtn');
+    if(clearBtn){
+      clearBtn.style.display = okSources ? 'inline-block' : 'none';
+      if(!clearBtn.dataset.wired){
+        clearBtn.dataset.wired = '1';
+        clearBtn.addEventListener('click', function(){
+          if(!confirm('Clear all cached search results, researched emails and company data?\n\nThis cannot be undone. The next search re-fetches and re-researches everything from scratch (slower, and it will spend real API budget again).')) return;
+          clearBtn.disabled = true;
+          var prev = clearBtn.textContent;
+          clearBtn.textContent = 'Clearing\u2026';
+          // Local caches first — these are cleared even if the backend
+          // call fails, so a stale local entry can't survive the attempt.
+          var localCleared = 0;
+          try{
+            ['hiraxia_emailCache','hiraxia_domainCache','hiraxia_sharedEmailCache'].forEach(function(k){
+              if(lsGet(k)){ lsSet(k, ''); localCleared++; }
+            });
+          }catch(e){}
+          var base = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
+          fetchWithTimeout(base+'/admin/clear-cache', {
+            method:'POST', headers: backendHeaders({'Content-Type':'application/json'}),
+            body: JSON.stringify({})
+          }, 30000)
+            .then(function(r){ return r.ok ? r.json() : {ok:false, error:'HTTP '+r.status}; })
+            .then(function(d){
+              if(d && d.ok){
+                var total = Object.keys(d.cleared||{}).reduce(function(n,k){
+                  return n + (typeof d.cleared[k]==='number' ? d.cleared[k] : 0);
+                }, 0);
+                clearBtn.textContent = '\u2713 Cleared '+total+' cached entries';
+                console.log('Cache cleared:', d.cleared);
+              } else {
+                clearBtn.textContent = '\u26a0 Backend: '+((d&&d.error)||'failed')+' (local cache cleared)';
+              }
+            })
+            .catch(function(e){
+              clearBtn.textContent = '\u26a0 Backend unreachable (local cache cleared)';
+              console.log('clear-cache error', e);
+            })
+            .then(function(){
+              setTimeout(function(){ clearBtn.textContent = prev; clearBtn.disabled = false; }, 4000);
+            });
+        });
+      }
+    }
     var copyBtn = document.getElementById('copyDiagBtn');
     if(copyBtn){
       copyBtn.style.display = okSources ? 'inline-block' : 'none';
