@@ -3444,6 +3444,15 @@
       j.emailReady = false;
       j.src = (j.src||'') + ' (predicted from company name — not verified)';
       j._lastResortDomain = domain; // the domain the hypotheses were built from — handed to AI research as a real starting point
+      // CRITICAL distinction, added after a real regression: a domain
+      // taken from the job's own URL is EVIDENCE of the employer's real
+      // domain, but one derived from the company name is a GUESS and is
+      // frequently wrong ("Toters" -> toters.com, when the real domain is
+      // totersapp.com). The backend's ownership check must only be
+      // enforced against a verified domain — enforcing it against a guess
+      // rejected genuine emails found at the employer's true domain,
+      // which is exactly what drove "researched 40, found 0".
+      j._domainVerified = !!guessDomainFromUrl(j.url);
       if(isHl) hlSkipReasons.guessed++;
       guessed.push(j);
     });
@@ -3637,7 +3646,21 @@
       .map(function(j){ j._researchPriority = researchPriority(j); return j; })
       .filter(function(j){ return j._researchPriority > MIN_RESEARCH_PRIORITY; })
       .sort(function(a,b){ return b._researchPriority - a._researchPriority; });
-    var stillNeedEmail = passedThreshold.slice(0, 40); // matches the backend's own per-search cap (raised 20->40 now that AI is the primary email engine, not a fallback)
+    // Explicit target: in-country jobs matching the role the customer
+    // actually searched for are THE product. They are no longer left to
+    // compete with everything else on a blended score for a shared pool
+    // of slots — they get a guaranteed allocation first, and only the
+    // leftover slots go to MENA/remote or off-field jobs. Without this, a
+    // search returning many MENA jobs could crowd out the local ones the
+    // customer came for.
+    var cR = curCountry();
+    var isCoreTarget = function(j){ return !j.isStretch && geoMatchStrict(j.loc, cR) && !j.usNamesake; };
+    var coreTargets = passedThreshold.filter(isCoreTarget);
+    var rest = passedThreshold.filter(function(j){ return !isCoreTarget(j); });
+    var RESEARCH_CAP = 60;              // matches the backend's per-search cap
+    var CORE_GUARANTEE = 40;            // explicit goal: 40 in-country, on-role jobs researched per search
+    var coreSlice = coreTargets.slice(0, Math.max(CORE_GUARANTEE, 0));
+    var stillNeedEmail = coreSlice.concat(rest.slice(0, Math.max(0, RESEARCH_CAP - coreSlice.length)));
     // Real coverage visibility: with every company-named job now eligible,
     // the interesting number is how many WANTED research versus how many
     // this pass could actually afford — a large gap is the real signal
@@ -3645,7 +3668,9 @@
     // (The async predicted->real upgrade pass picks up the remainder.)
     var withCompany = jobs.filter(function(j){ return !j.email && (j.emailHypotheses && j.emailHypotheses.length); }).length;
     window.__researchCoverage = 'Email research coverage: '+jobs.length+' jobs \u2014 '+withCompany+' with a researchable company/domain, '
-      + passedThreshold.length+' passed the priority threshold, '+stillNeedEmail.length+' researched this pass'
+      + passedThreshold.length+' passed the priority threshold, '
+      + coreTargets.length+' in-country on-role ('+coreSlice.length+' researched, guarantee '+CORE_GUARANTEE+'), '
+      + stillNeedEmail.length+' researched this pass'
       + (passedThreshold.length > stillNeedEmail.length ? ' ('+(passedThreshold.length - stillNeedEmail.length)+' deferred to background enrichment)' : '');
     if(!stillNeedEmail.length){
       appendDiagLine('AI research: skipped — every job already had a confirmed email, or none passed the research-priority threshold'); // real gap: this silently returned with zero trace before, indistinguishable from the feature never running at all
@@ -3660,12 +3685,18 @@
       // look for evidence of, never to return one back as a result.
       return { title:j.title, company:j.company, loc:j.loc, url:j.url, desc:j.desc,
                domain: j._lastResortDomain || guessDomainFromUrl(j.url) || null,
+               // Tells the backend whether that domain is EVIDENCE (taken
+               // from the job's own URL) or a GUESS derived from the
+               // company name. Ownership validation is only safe to
+               // enforce against the former — see the regression note in
+               // applyLastResortEmailGuess.
+               domainVerified: !!(j._domainVerified || guessDomainFromUrl(j.url)),
                emailHypotheses: j.emailHypotheses || [] };
     });
     return fetchWithTimeout(base+'/ai-research', {
       method:'POST', headers: backendHeaders({'Content-Type':'application/json'}),
       body: JSON.stringify({ jobs: payload, searchId: searchId || ('search_'+Date.now()), searchSessionId: searchSessionId||null })
-    }, 240000) // raised from 120s alongside the job-cap increase (5\u219220) — 2 waves of real multi-round research needs real buffer; still just a client-side cap, doesn't control any platform-level timeout on Render's side
+    }, 420000) // raised 240s->420s alongside the 40->60 job cap and the larger per-job tool budget: 60 jobs at 15-concurrent is 4 waves of genuinely multi-round research. Still just a client-side cap — it doesn't control any platform-level timeout on Render's side, so a slower run can still be cut off upstream.
       .then(function(r){ return r.ok ? r.json() : {enabled:false, results:[]}; })
       .then(function(d){
         if(!d.enabled){ window.__aiResearchDebug = 'AI research: disabled (OPENAI_RESEARCH_ENABLED not set)'; return; }
@@ -3816,7 +3847,8 @@
             ' \u00b7 Real emails: '+d.realEmails+
             ' \u00b7 Strong emails: '+d.strongEmails+
             ' \u00b7 Predicted emails: '+(d.predictedEmails!=null?d.predictedEmails:'?')+
-            ' \u00b7 Predicted\u2192real: '+d.predictedToReal;
+            ' \u00b7 Predicted\u2192real: '+d.predictedToReal+
+            ((d.rejections && Object.keys(d.rejections).length) ? ' \u00b7 Rejected: '+Object.keys(d.rejections).map(function(k){ return k+'='+d.rejections[k]; }).join(', ') : '');
           window.__singleSearchAiDiagnostic = summary;
           console.log(summary);
           appendDiagLine(summary);
@@ -5229,6 +5261,12 @@
       // to find evidence for, never answers it may echo back.
       return { title:j.title, company:j.company, loc:j.loc, url:j.url, desc:j.desc,
                domain: j._lastResortDomain || guessDomainFromUrl(j.url) || null,
+               // Tells the backend whether that domain is EVIDENCE (taken
+               // from the job's own URL) or a GUESS derived from the
+               // company name. Ownership validation is only safe to
+               // enforce against the former — see the regression note in
+               // applyLastResortEmailGuess.
+               domainVerified: !!(j._domainVerified || guessDomainFromUrl(j.url)),
                emailHypotheses: j.emailHypotheses || [] };
     });
     if(!candidates.length) return Promise.resolve();
