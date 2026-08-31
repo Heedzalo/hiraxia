@@ -1497,7 +1497,7 @@
     if(window.__hiraxiaGrab) window.__hiraxiaGrab(slot);
     cycleIdx++;
     setTimeout(cyc, 2400);
-  }, 1500);
+  }, 600);
 
   /* ================= settings / keys (localStorage only) ================= */
   var LS = window.localStorage;
@@ -1894,7 +1894,7 @@
         headers: Object.assign({'Content-Type':'application/json', 'Authorization':'Bearer '+authToken}, backendHeaders()),
         body: JSON.stringify(partial)
       }).catch(function(){ /* silent — local storage remains the source of truth if this fails */ });
-    }, 900);
+    }, 300);
   }
 
   /* ================= first-time guided tour ================= *
@@ -3378,6 +3378,150 @@
   // therefore treats these as "no email yet" automatically — which is
   // exactly right: they are unproven.
   var EMAIL_HYPOTHESIS_PREFIXES = ['careers', 'hr', 'recruitment', 'jobs', 'talent', 'recruiting'];
+  // Real problem seen in a live pharmacist search: ~40 of 51 research
+  // slots were spent on Riyadh listings syndicated through JobLeads /
+  // Learn4Good / Jobrapido, with employer names like "Work corp",
+  // "Abroad Work", "Avanta Works", "Work in USA", "Work standard",
+  // "JobLeader", "Jing Hau", "Flyper", "Woopel", "ConFlip" — near-
+  // identical marketing-style titles repeated dozens of times. These are
+  // content-farm/lead-generation reposts, not real distinct employers,
+  // and one of them ("Work corp") reached the TOP of the results at 97%
+  // with an email scraped from its own farm domain. They are not removed
+  // outright — some syndicated listings do point at real jobs — but they
+  // must never outrank a genuine employer or consume the research budget
+  // that belongs to in-country, on-role jobs.
+  var CONTENT_FARM_SOURCE = /(JobLeads|Learn4Good|Jobrapido|BeBee|Up2staff|Metaintro|RemoteScout24|Career Vault|Receptix|Expertini|The Elite Job|Remote Zest|Vacancy Global|Jobgether|DailyRemote|WeekdayDoc|Ladders|Lensa|Sorce|Teal|JobzMall|Trabajo\.org)/i;
+  // Employer names that are themselves generic job-farm branding rather
+  // than a real company. Deliberately anchored patterns, not loose
+  // substring matching, so a real company like "Workday" or "Network
+  // Rail" is never caught by accident.
+  var FARM_EMPLOYER_NAME = /^(work\s+(corp|in\s+usa|standard|abroad)|abroad\s+work|avanta\s+works|jobleader|job\s?center|pharmacy\s+careers|india\s+abroad|flip\s?retail|conflip|flyper|woopel|jing\s+hau|ppoar|description\s+)/i;
+  // Two distinct strengths of signal, deliberately kept apart after
+  // testing against real data: a farm-style EMPLOYER NAME is near-certain
+  // fabrication, while merely being SYNDICATED through one of these
+  // aggregators is weak evidence — real companies (Stryker, NHS Scotland,
+  // Fakeeh Care Group, Workato) legitimately appear via JobLeads/BeBee/
+  // Jobrapido. Treating those two the same would penalise genuine
+  // employers as hard as invented ones.
+  // Per a real observation: when the "company" field holds an aggregator
+  // label ("Careers and Jobs in Lebanon", "jobs-in-lebanon", blank), the
+  // ACTUAL employer is frequently sitting in the job title — e.g. "Malia
+  // Group is hiring Sales, Beauty Consultants..." or "Partner Lawyer |
+  // Khashoggi Holding" or "[Hiring] Data Entry Clerk @Qode". Those
+  // listings were being written off as unusable when a real, researchable
+  // employer name was right there. This recovers it so the job re-enters
+  // the normal domain-guess -> hypothesis -> research pipeline.
+  // Deliberately conservative patterns: a wrong employer name is worse
+  // than none, since it would send research (and eventually a CV) to the
+  // wrong company.
+  function recoverEmployerFromListing(j){
+    if(!j) return null;
+    var t = String(j.title||'').replace(/&amp;/g,'&').trim();
+    if(!t) return null;
+    var m;
+    var cand = null;
+    // "Malia Group is hiring ..." / "Acme Ltd is recruiting ..."
+    if((m = t.match(/^(.{2,50}?)\s+is\s+(?:hiring|recruiting|looking for)\b/i))) cand = m[1];
+    // "... @Qode" / "... @ Qode"  (trailing handle)
+    else if((m = t.match(/@\s*([A-Za-z0-9&.\-'’ ]{2,40})\s*$/))) cand = m[1];
+    // "Partner Lawyer | Khashoggi Holding" (trailing pipe segment)
+    else if((m = t.match(/\|\s*([A-Za-z0-9&.\-'’ ]{2,40})\s*$/))) cand = m[1];
+    // "Pharmacist at Amel Association"
+    else if((m = t.match(/\bat\s+([A-Z][A-Za-z0-9&.\-'’ ]{2,40})\s*$/))) cand = m[1];
+    if(!cand) return null;
+    cand = cand.replace(/[\s\-–—|]+$/,'').trim();
+    if(cand.length < 2 || cand.length > 50) return null;
+    // Never accept a recovered name that is itself generic, an aggregator
+    // label, or just a restatement of the role being searched for.
+    if(isGenericCompanyName(cand)) return null;
+    if(/^(lebanon|beirut|remote|anywhere|apply|hiring|careers?|jobs?)$/i.test(cand)) return null;
+    return cand;
+  }
+  // Runs over the whole merged list: for any job whose company field is
+  // missing or generic, try to recover the real employer from the title.
+  // The original label is preserved in _originalCompany so nothing is
+  // silently lost, and the recovery is visible in the job's source tag.
+  function recoverEmployersForList(jobs){
+    var recovered = 0;
+    jobs.forEach(function(j){
+      var cur = String(j.company||'').trim();
+      if(cur && !isGenericCompanyName(cur)) return; // already a real employer name
+      var found = recoverEmployerFromListing(j);
+      if(!found) return;
+      j._originalCompany = cur || null;
+      j.company = found;
+      j._employerRecovered = true;
+      j.src = (j.src||'') + ' (employer recovered from listing title)';
+      recovered++;
+    });
+    if(recovered) window.__employerRecoveryDebug = 'Employer recovery: '+recovered+' listing(s) had a real employer name in the title behind a generic/aggregator label — now researchable';
+    return recovered;
+  }
+  function contentFarmStrength(j){
+    if(!j) return 0;
+    if(FARM_EMPLOYER_NAME.test(String(j.company||'').trim())) return 2; // fabricated employer
+    // Volume/repetition signature. Per explicit instruction, this alone
+    // is NOT enough to treat a listing as fabricated: a real, named
+    // employer that genuinely posts many similar roles (a pharmacy chain
+    // hiring pharmacists across branches, a delivery company hiring
+    // drivers) must stay fully eligible for email research. It only
+    // reaches full strength when the "employer" ALSO has no real name to
+    // stand behind — blank, or a generic/aggregator label. With a real
+    // company name it drops to the mild tier: slightly deprioritised so
+    // it can't flood the top of the results, but still researched.
+    if(j._employerVolumeFarm){
+      var nm = String(j.company||'').trim();
+      return (!nm || isGenericCompanyName(nm)) ? 2 : 1;
+    }
+    if(CONTENT_FARM_SOURCE.test(String(j.src||''))) return 1;           // syndicated, employer may be real
+    return 0;
+  }
+  function isContentFarmListing(j){ return contentFarmStrength(j) > 0; }
+  // Volume signature, per a real observation: ten jobs from one "employer"
+  // is itself a farm signal. A genuine employer with many openings posts
+  // many DIFFERENT roles (Toters: data engineer, business analyst, HR
+  // officer). A farm posts the SAME role over and over under reworded
+  // marketing titles in the same city — "remote zest jobs" with ten
+  // bartender variants, "Pharmacy Careers" with three identical
+  // pharmacist ones, "Work corp" / "Abroad Work" with Riyadh pharmacist
+  // reposts. Computed once across the whole result set, then cached on
+  // each job so the per-job checks stay cheap.
+  function markEmployerVolumeFarms(jobs){
+    var byCo = {};
+    jobs.forEach(function(j){
+      var k = (j.company||'').toLowerCase().trim();
+      if(!k) return;
+      (byCo[k] = byCo[k] || []).push(j);
+    });
+    Object.keys(byCo).forEach(function(k){
+      var grp = byCo[k];
+      if(grp.length < 5) return; // below this, high volume is unremarkable
+      // Reduce each title to its meaningful words, then measure how much
+      // the group repeats itself. Farms recycle the same few role words;
+      // a real employer's postings diverge.
+      var wordSets = grp.map(function(j){
+        return String(j.title||'').toLowerCase().replace(/[^a-z\s]/g,' ').split(/\s+/)
+          .filter(function(w){ return w.length > 3; });
+      });
+      var counts = {};
+      wordSets.forEach(function(ws){
+        var uniq = {};
+        ws.forEach(function(w){ uniq[w] = 1; });
+        Object.keys(uniq).forEach(function(w){ counts[w] = (counts[w]||0) + 1; });
+      });
+      // Share of postings containing the single most-repeated word.
+      var topShare = 0;
+      Object.keys(counts).forEach(function(w){ topShare = Math.max(topShare, counts[w] / grp.length); });
+      // Same-city concentration: a farm's reposts pile into one location.
+      var locs = {};
+      grp.forEach(function(j){ var L = String(j.loc||'').toLowerCase().trim(); locs[L] = (locs[L]||0)+1; });
+      var topLocShare = 0;
+      Object.keys(locs).forEach(function(L){ topLocShare = Math.max(topLocShare, locs[L] / grp.length); });
+      if(topShare >= 0.8 && topLocShare >= 0.8){
+        grp.forEach(function(j){ j._employerVolumeFarm = true; });
+      }
+    });
+  }
   function buildEmailHypotheses(domain){
     if(!domain) return [];
     return EMAIL_HYPOTHESIS_PREFIXES.map(function(p){ return p + '@' + domain; });
@@ -3636,6 +3780,20 @@
       // NEVER excluded: an employer on Workday still has a real domain
       // worth searching. A mild ordering penalty, not a gate.
       if(looksLikeRealATS(j)) p -= 3;
+      // Content-farm listings out-of-country are the worst possible use
+      // of a research slot: syndicated reposts of the same role under a
+      // fabricated employer name. Heavily penalised so the budget goes
+      // to genuine employers, and to in-country jobs first. An
+      // in-country farm listing gets a milder penalty, since a real
+      // local job does sometimes surface through these aggregators.
+      var farmP = contentFarmStrength(j);
+      if(farmP){
+        var localP = geoMatchStrict(j.loc, curCountry()) && !j.usNamesake;
+        // Fabricated employer name out-of-country is the worst possible
+        // use of a slot; a merely-syndicated real company is only mildly
+        // deprioritised.
+        p -= (farmP === 2 ? (localP ? 10 : 30) : (localP ? 2 : 8));
+      }
       return p;
     }
     var candidates = jobs.filter(function(j){ return !j.email; }); // a job with a REAL email needs no research; predicted ones have j.email null by design and stay eligible
@@ -3660,7 +3818,37 @@
     var RESEARCH_CAP = 60;              // matches the backend's per-search cap
     var CORE_GUARANTEE = 40;            // explicit goal: 40 in-country, on-role jobs researched per search
     var coreSlice = coreTargets.slice(0, Math.max(CORE_GUARANTEE, 0));
-    var stillNeedEmail = coreSlice.concat(rest.slice(0, Math.max(0, RESEARCH_CAP - coreSlice.length)));
+    var selected = coreSlice.concat(rest.slice(0, Math.max(0, RESEARCH_CAP - coreSlice.length)));
+    // BIG speed/cost win, no loss of emails: research is per-EMPLOYER, not
+    // per-job. A recruitment email is a property of the company, not of the
+    // individual posting, and the company cache already reflects that — but
+    // it only helps AFTER the first lookup returns. Since these run 15-wide
+    // concurrently, ten jobs from the same employer previously all missed
+    // the cache at the same instant and each did a full independent
+    // research round. Measured against a real pharmacist run, 55% of
+    // research calls were duplicate companies. Now one representative job
+    // per company is researched (the highest-priority one, so the best
+    // context is used), and the result is copied to every sibling below —
+    // same emails found, roughly half the calls and half the wall-clock.
+    var byCompanyResearch = {};
+    var stillNeedEmail = [];
+    selected.forEach(function(j){
+      var key = (j.company||'').toLowerCase().trim();
+      // No usable company name, or a generic/aggregator label that must
+      // never be treated as one employer — research these individually,
+      // exactly as before.
+      if(!key || isGenericCompanyName(key)){ stillNeedEmail.push(j); return; }
+      // A volume-farm listing is only excluded from per-employer grouping
+      // when it has no real company name to group BY (contentFarmStrength
+      // 2). A genuinely named employer that posts many similar roles is
+      // exactly the case grouping was built for — one lookup, one email,
+      // shared across its postings.
+      if(j._employerVolumeFarm && contentFarmStrength(j) === 2){ stillNeedEmail.push(j); return; }
+      if(byCompanyResearch[key]){ byCompanyResearch[key].siblings.push(j); return; }
+      byCompanyResearch[key] = { rep: j, siblings: [] };
+      stillNeedEmail.push(j);
+    });
+    var dedupSaved = selected.length - stillNeedEmail.length;
     // Real coverage visibility: with every company-named job now eligible,
     // the interesting number is how many WANTED research versus how many
     // this pass could actually afford — a large gap is the real signal
@@ -3671,6 +3859,7 @@
       + passedThreshold.length+' passed the priority threshold, '
       + coreTargets.length+' in-country on-role ('+coreSlice.length+' researched, guarantee '+CORE_GUARANTEE+'), '
       + stillNeedEmail.length+' researched this pass'
+      + (dedupSaved ? ' ('+dedupSaved+' duplicate-employer calls skipped \u2014 filled from the same company\'s result instead)' : '')
       + (passedThreshold.length > stillNeedEmail.length ? ' ('+(passedThreshold.length - stillNeedEmail.length)+' deferred to background enrichment)' : '');
     if(!stillNeedEmail.length){
       appendDiagLine('AI research: skipped — every job already had a confirmed email, or none passed the research-priority threshold'); // real gap: this silently returned with zero trace before, indistinguishable from the feature never running at all
@@ -3736,6 +3925,30 @@
             }
             j.src = (j.src||'') + ' (email via AI research: '+(match.sourceType||'?')+')';
           });
+          // Copy each researched employer's result onto its sibling jobs —
+          // the other half of the per-employer dedupe above. Without this
+          // the dedupe would LOSE emails rather than just save calls.
+          // Guarded by the same isGenericCompanyName check used when
+          // building the groups, so an aggregator label can never spread
+          // one email across unrelated employers.
+          var sibPropagated = 0;
+          Object.keys(byCompanyResearch).forEach(function(key){
+            var grp = byCompanyResearch[key];
+            if(!grp.rep.email || grp.rep.emailPredicted) return; // nothing evidence-backed to copy
+            grp.siblings.forEach(function(sib){
+              if(sib.email) return;
+              sib.email = grp.rep.email;
+              sib.emailPredicted = false;
+              sib.emailVerified = grp.rep.emailVerified;
+              sib.emailConfidence = grp.rep.emailConfidence || 'RESEARCHED';
+              sib.emailReady = true;
+              sib.emailEvidence = 'same employer as "'+String(grp.rep.title||'').slice(0,60)+'" — '+(grp.rep.emailEvidence||'researched');
+              sib.emailSource = grp.rep.emailSource || null;
+              sib.src = (sib.src||'') + ' (email via same-employer research)';
+              sibPropagated++;
+            });
+          });
+          if(sibPropagated) window.__aiResearchDebug += ' \u00b7 '+sibPropagated+' sibling job(s) filled from the same employer\'s result';
           if(renderJobs.lastOk !== undefined) renderJobs(renderJobs.lastOk, renderJobs.lastSrcNames);
         }
 
@@ -4923,6 +5136,18 @@
       else s -= 5;
     }
     if(job.nearbyRole && !job.isStretch) s += 4; // same field, nearby country — keep it high
+    // Real problem seen live: a content-farm listing ("Work corp",
+    // Riyadh, via JobLeads) reached the TOP of a Lebanon pharmacist
+    // search at 97%, above every genuine Lebanese pharmacy job, because
+    // it happened to have an email scraped from the farm's own domain.
+    // These are penalised in ranking too, not just in research spend —
+    // an out-of-country farm repost should never outrank a real local
+    // employer. Still shown, just never at the top.
+    var farmS = contentFarmStrength(job);
+    if(farmS){
+      var localS = geoMatchStrict(job.loc, c) && !job.usNamesake;
+      s -= (farmS === 2 ? (localS ? 4 : 12) : (localS ? 1 : 3));
+    }
     // Real ask: predicted emails were getting the SAME ranking boost as
     // genuinely verified ones (a flat +3 for "has any email at all") —
     // this replaces that with a real confidence hierarchy, so email
@@ -5973,11 +6198,11 @@
         {n:'Arbeitnow', p:sourceArbeitnow(q)},
         {n:'Jobicy', p:sourceJobicy(q)},
         {n:'TheMuse', p:sourceMuse(q)},
-        {n:'Himalayas', p:new Promise(function(res){ setTimeout(function(){ res(sourceHimalayas(q)); }, 300); }).then(function(p){ return p; })},
-        {n:'RemoteJobs.org', p:new Promise(function(res){ setTimeout(function(){ res(sourceRemoteJobsOrg(q)); }, 600); }).then(function(p){ return p; })},
+        {n:'Himalayas', p:new Promise(function(res){ setTimeout(function(){ res(sourceHimalayas(q)); }, 100); }).then(function(p){ return p; })},
+        {n:'RemoteJobs.org', p:new Promise(function(res){ setTimeout(function(){ res(sourceRemoteJobsOrg(q)); }, 200); }).then(function(p){ return p; })},
         {n:'JobsPipe', p:new Promise(function(res){ setTimeout(function(){ res(sourceJobsPipe(q, (c.v==='sa2'?'sa':(c.v==='remote'?'':c.v)))); }, 900); }).then(function(p){ return p; })},
-        (c.v==='lb' ? {n:'HireLebanese', p:new Promise(function(res){ setTimeout(function(){ res(sourceHireLebanese(q)); }, 1200); }).then(function(p){ return p; })} : null),
-        (c.v==='lb' ? {n:'Daleel Madani', p:new Promise(function(res){ setTimeout(function(){ res(sourceDaleelMadani(q)); }, 1350); }).then(function(p){ return p; })} : null),
+        (c.v==='lb' ? {n:'HireLebanese', p:new Promise(function(res){ setTimeout(function(){ res(sourceHireLebanese(q)); }, 400); }).then(function(p){ return p; })} : null),
+        (c.v==='lb' ? {n:'Daleel Madani', p:new Promise(function(res){ setTimeout(function(){ res(sourceDaleelMadani(q)); }, 500); }).then(function(p){ return p; })} : null),
         {n:'WebSearch', p:new Promise(function(res){ setTimeout(function(){ res(sourceWebSearchJobs(q, curCity() || c.gj || '')); }, 1500); }).then(function(p){ return p; })},
         {n:'AI-Discovery', p:new Promise(function(res){ setTimeout(function(){
           // Real ask: "let it search wider for the same job" — if a specific
@@ -5987,7 +6212,7 @@
           var cityLoc = curCity();
           var countryLoc = c.gj || '';
           res(sourceAiDiscoveredJobs(q, cityLoc || countryLoc || '', cityLoc ? countryLoc : '', searchSessionId));
-        }, 1800); }).then(function(p){ return p; })}
+        }, 700); }).then(function(p){ return p; })}
       ];
       // Bounded query-expansion pass — see getSynonymForQuery's own comment.
       // Only the two highest-volume sources, only when a real match is found,
@@ -6042,6 +6267,11 @@
         // the same answer instead of each re-deriving it from a loc string
         // that has already lost the evidence.
         jobs.forEach(function(j){ if(jobIsUsNamesake(j)) j.usNamesake = true; });
+        // Must run BEFORE the farm pass and before hypotheses are built:
+        // a listing whose real employer is recovered here should be judged
+        // and researched as that employer, not as the aggregator label.
+        recoverEmployersForList(jobs);
+        markEmployerVolumeFarms(jobs); // volume/repetition farm signature — must run before scoring, see its own comment
         jobs = dedupeJobs(jobs).filter(function(j){ return !j.date || daysAgo(j.date) <= 20; });
         var uniqueJobsCount = jobs.length; // after dedup, still includes off-field "stretch" fillers at this point
 
@@ -6344,7 +6574,11 @@
             var sl9 = document.getElementById('srcLine');
             sl9.textContent = (sl9.textContent ? sl9.textContent+' \u00b7 ' : '') + window.__hlEarlyTrace;
           }
-          if(window.__hlLastResortTrace){
+          if(window.__employerRecoveryDebug){
+          var slER = document.getElementById('srcLine');
+          slER.textContent = (slER.textContent ? slER.textContent+' \u00b7 ' : '') + window.__employerRecoveryDebug;
+        }
+        if(window.__hlLastResortTrace){
             var sl10 = document.getElementById('srcLine');
             sl10.textContent = (sl10.textContent ? sl10.textContent+' \u00b7 ' : '') + window.__hlLastResortTrace;
           }
@@ -6698,20 +6932,41 @@
     view = view.slice().sort(function(a,b){
       var aS = a.isStretch?1:0, bS = b.isStretch?1:0;
       if(aS !== bS) return aS - bS;                      // relevance band first
+      // Per explicit instruction: the searched country always comes first
+      // within a relevance band. Country was not a sort key at all before,
+      // which is how Riyadh and remote listings kept landing above real
+      // Lebanese jobs whenever they scored a point or two higher. This is
+      // now an absolute tier, not a scoring nudge that a farm listing or
+      // a fresher date could out-argue.
+      var aC = (geoMatchStrict(a.loc, c2) && !a.usNamesake) ? 0 : 1;
+      var bC = (geoMatchStrict(b.loc, c2) && !b.usNamesake) ? 0 : 1;
+      if(aC !== bC) return aC - bC;                      // then in-country
       var aE = a.email?0:1, bE = b.email?0:1;
       if(aE !== bE) return aE - bE;                      // then email-ready
       return (b.score - a.score) || ((a.days==null?15:a.days) - (b.days==null?15:b.days));
     });
-    var firstStretchIdx = view.findIndex(function(j){ return j.isStretch; });
-    // First non-stretch job that has no credible email — the boundary of
-    // the "email not found" section within the relevant results.
-    var firstNoEmailIdx = view.findIndex(function(j){ return !j.isStretch && !j.email; });
+    // Section boundaries, recomputed for the new country-first ordering.
+    // Order within the list is now: in-country with email -> in-country
+    // without -> other countries with email -> other countries without ->
+    // off-field. The old single "no email" divider assumed country wasn't
+    // a tier and would have mislabelled out-of-country email-ready jobs as
+    // "no email found", so each group gets its own boundary.
+    var inC = function(j){ return geoMatchStrict(j.loc, c2) && !j.usNamesake; };
+    var firstStretchIdx   = view.findIndex(function(j){ return j.isStretch; });
+    var firstLocalNoEmail = view.findIndex(function(j){ return !j.isStretch && inC(j) && !j.email; });
+    var firstOtherIdx     = view.findIndex(function(j){ return !j.isStretch && !inC(j); });
+    var firstOtherNoEmail = view.findIndex(function(j){ return !j.isStretch && !inC(j) && !j.email; });
+    var countryLabel = (c2 && (c2.label || c2.gj)) ? String(c2.label || c2.gj).replace(/^[^\w]+/, '').trim() : 'your country';
     list.innerHTML = view.map(function(j, idx){
       var divider = '';
       if(idx === firstStretchIdx && firstStretchIdx > 0){
         divider = '<div class="src-line" style="margin:12px 0 6px; color:#c9a24b;">'+t('otherOpenings')+'</div>';
-      } else if(idx === firstNoEmailIdx && firstNoEmailIdx > 0){
+      } else if(idx === firstOtherIdx && firstOtherIdx > 0){
+        divider = '<div class="src-line" style="margin:12px 0 6px; color:#8a93a6;">Beyond '+esc(countryLabel)+' \u2014 same role, elsewhere</div>';
+      } else if(idx === firstOtherNoEmail && firstOtherNoEmail > 0 && idx !== firstOtherIdx){
         divider = '<div class="src-line" style="margin:12px 0 6px; color:#8a93a6;">More jobs \u2014 no confirmed application email found yet</div>';
+      } else if(idx === firstLocalNoEmail && firstLocalNoEmail > 0){
+        divider = '<div class="src-line" style="margin:12px 0 6px; color:#8a93a6;">More in '+esc(countryLabel)+' \u2014 no confirmed application email found yet</div>';
       }
       var pct;
       if(j.isStretch){ pct = Math.max(8, Math.min(28, Math.round(15 + j.score*2))); } // stretch jobs: always visibly low
