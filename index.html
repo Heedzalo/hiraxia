@@ -2041,6 +2041,7 @@
             (window.__googleJobsEmptyDebug && window.__googleJobsEmptyDebug.length ? ' \u00b7 GoogleJobs empty responses: '+window.__googleJobsEmptyDebug.join(' | ') : '')+
             (window.__jobsPipeEmptyDebug ? ' \u00b7 '+window.__jobsPipeEmptyDebug : '')+
             (window.__hireLebaneseDiag ? ' \u00b7 HireLebanese diag: '+JSON.stringify(window.__hireLebaneseDiag) : '')+
+            (window.__daleelDiag ? ' \u00b7 Daleel Madani diag: '+JSON.stringify(window.__daleelDiag) : '')+
             (window.__webSearchDiag && window.__webSearchDiag.length ? ' \u00b7 WebSearch diag: '+window.__webSearchDiag.join(' | ') : '')+
             ' \u00b7 Domain search: Serper key '+(d.serperConfigured?'configured':'NOT configured on Render')+
             ', Brave key '+(d.braveConfigured?'configured':'NOT configured on Render')+
@@ -3484,7 +3485,7 @@
       if(renderJobs.lastOk !== undefined) renderJobs(renderJobs.lastOk, renderJobs.lastSrcNames);
     });
   }
-  function runAiResearch(jobs, searchId){
+  function runAiResearch(jobs, searchId, searchSessionId){
     // Real gap found via user report: this took the first 20 qualifying
     // jobs in whatever order they happened to be in — including "different
     // field" fillers (isStretch), spending real research budget on jobs
@@ -3506,7 +3507,7 @@
     });
     return fetchWithTimeout(base+'/ai-research', {
       method:'POST', headers: backendHeaders({'Content-Type':'application/json'}),
-      body: JSON.stringify({ jobs: payload, searchId: searchId || ('search_'+Date.now()) })
+      body: JSON.stringify({ jobs: payload, searchId: searchId || ('search_'+Date.now()), searchSessionId: searchSessionId||null })
     }, 240000) // raised from 120s alongside the job-cap increase (5\u219220) — 2 waves of real multi-round research needs real buffer; still just a client-side cap, doesn't control any platform-level timeout on Render's side
       .then(function(r){ return r.ok ? r.json() : {enabled:false, results:[]}; })
       .then(function(d){
@@ -3596,6 +3597,61 @@
     window.__productionDiagReport = lines.join('\n');
     console.log(window.__productionDiagReport);
     appendDiagLine('Full production diagnostic logged to console (window.__productionDiagReport)');
+
+    // Real audit deliverable: report the real, already-computed predicted-
+    // email count to the backend — it has no visibility into this at all,
+    // predicted/guessed emails are a purely client-side concept. The
+    // actual single-search diagnostic fetch happens later, once BOTH
+    // background AI pipelines (deep discovery, predicted-upgrade) have
+    // genuinely finished — see maybeShowSingleSearchDiagnostic's own
+    // comment for why firing it here would be far too early.
+    try{
+      var baseD = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
+      var sid = window.__lastSearchSessionId;
+      if(sid){
+        fetch(baseD+'/ai-search-marker', {
+          method:'POST', headers: backendHeaders({'Content-Type':'application/json'}),
+          body: JSON.stringify({ searchSessionId: sid, predictedEmailCount: predicted.length })
+        }).catch(function(){});
+      }
+    }catch(e){}
+  }
+  // Real audit deliverable: "one production diagnostic for a single
+  // search" needs to wait for BOTH background AI pipelines (deep
+  // discovery can run up to ~8-9 minutes, predicted-upgrade
+  // independently) to actually finish — fetching it right after the
+  // synchronous pipeline completes (which was the first attempt) would
+  // catch almost none of that background work and show a misleadingly
+  // small "AI-exclusive jobs" / "new job candidates" count. This tracks
+  // both pipelines and only fetches once neither is still running.
+  window.__pendingAiPipelines = 0;
+  function maybeShowSingleSearchDiagnostic(searchSessionId){
+    window.__pendingAiPipelines = Math.max(0, (window.__pendingAiPipelines||0) - 1);
+    if(window.__pendingAiPipelines > 0) return; // the other pipeline is still running — wait for it too
+    var base = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
+    // Small delay — the last events for this search need a moment to
+    // actually land in Mongo before reading them back.
+    setTimeout(function(){
+      fetchWithTimeout(base+'/ai-search-diagnostics/'+encodeURIComponent(searchSessionId), { headers: backendHeaders({}) }, 15000)
+        .then(function(r){ return r.ok ? r.json() : null; })
+        .then(function(d){
+          if(!d || d.error) return;
+          var summary = 'Single-search AI diagnostic — Initial sources: '+(d.initialSourcesJobs!=null?d.initialSourcesJobs:'?')+
+            ' \u00b7 AI research analyzed: '+d.aiResearchJobsAnalyzed+
+            ' \u00b7 Fresh external searches: '+d.freshExternalSearches+
+            ' \u00b7 Raw external results: '+d.rawExternalResults+
+            ' \u00b7 New job candidates: '+d.newJobCandidates+
+            ' \u00b7 AI-exclusive jobs: '+d.aiExclusiveJobs+
+            ' \u00b7 Existing jobs enriched: '+d.existingJobsEnriched+
+            ' \u00b7 Real emails: '+d.realEmails+
+            ' \u00b7 Strong emails: '+d.strongEmails+
+            ' \u00b7 Predicted emails: '+(d.predictedEmails!=null?d.predictedEmails:'?')+
+            ' \u00b7 Predicted\u2192real: '+d.predictedToReal;
+          window.__singleSearchAiDiagnostic = summary;
+          console.log(summary);
+          appendDiagLine(summary);
+        }).catch(function(){});
+    }, 2500);
   }
   function backgroundVerifyLastResortGuesses(guessedJobs){
     if(!guessedJobs.length) return;
@@ -4669,6 +4725,23 @@
         return d.jobs || [];
       });
   }
+  // Daleel Madani — Lebanon's main NGO/nonprofit job board. Best-effort
+  // scraper (see the backend route's own comment — this site's exact
+  // HTML structure isn't verified live), so its diagnostic surfaces the
+  // same way HireLebanese's does: only shown when there's genuinely
+  // nothing to display, so a working search stays clean.
+  function sourceDaleelMadani(q){
+    var base = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
+    return fetchWithTimeout(base+'/daleel-jobs', {
+      method:'POST', headers: backendHeaders({'Content-Type':'application/json'}),
+      body: JSON.stringify({ query: q||'' })
+    }, 15000)
+      .then(function(r){ return r.ok ? r.json() : {jobs:[]}; })
+      .then(function(d){
+        if((!d.jobs || !d.jobs.length) && d.daleelDiag) window.__daleelDiag = d.daleelDiag;
+        return d.jobs || [];
+      });
+  }
   // Real web search source — confirmed decision: runs on EVERY search, not
   // just niche categories. Genuinely different from every other source
   // here: those are structured job APIs; this is general web search via
@@ -4765,11 +4838,11 @@
   // (AI_DISCOVERY_ENABLED) since it has a different cost profile than
   // email enrichment. Returns instantly at zero cost when the backend
   // flag is off, same graceful-disable pattern as every other AI route.
-  function sourceAiDiscoveredJobs(q, location, broaderLocation){
+  function sourceAiDiscoveredJobs(q, location, broaderLocation, searchSessionId){
     var base = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
     return fetchWithTimeout(base+'/ai-discover-jobs', {
       method:'POST', headers: backendHeaders({'Content-Type':'application/json'}),
-      body: JSON.stringify({ query: q||'', location: location||'', broaderLocation: broaderLocation||'', searchId: 'search_'+Date.now() })
+      body: JSON.stringify({ query: q||'', location: location||'', broaderLocation: broaderLocation||'', searchId: 'search_'+Date.now(), searchSessionId: searchSessionId||null })
     }, 300000) // raised again from 200s — the retry-on-zero fix can now run TWO sequential AI attempts inside this one request, and if that coincides with a cold-start backend, worst-case time stacks higher than the old 200s covered; still observed failing at 200s in real testing
       .then(function(r){ return r.ok ? r.json() : {enabled:false, jobs:[]}; })
       .then(function(d){
@@ -4797,15 +4870,15 @@
   // runAiResearch, just running for potentially much longer.
   var ASYNC_DISCOVERY_POLL_MS = 4000;
   var ASYNC_DISCOVERY_MAX_POLLS = 130; // ~8-9 minutes, matching the backend's own wall-clock ceiling with a little slack
-  function startAsyncDiscovery(q, location, targetCount, cities){
+  function startAsyncDiscovery(q, location, targetCount, cities, searchSessionId){
     var base = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
     return fetchWithTimeout(base+'/ai-discover-jobs-async', {
       method:'POST', headers: backendHeaders({'Content-Type':'application/json'}),
-      body: JSON.stringify({ query: q||'', location: location||'', targetCount: targetCount||25, cities: cities||[] })
+      body: JSON.stringify({ query: q||'', location: location||'', targetCount: targetCount||25, cities: cities||[], searchSessionId: searchSessionId||null })
     }, 45000) // real fix for a real bug: raised from 15s — this call itself is fast under normal conditions, but if the backend is on a plan that sleeps after inactivity (e.g. Render free tier), the FIRST request after idle can take 30-50s+ to wake it up, well past the old 15s timeout — causing exactly the "Failed to fetch" seen in testing
       .then(function(r){ return r.ok ? r.json() : {enabled:false}; })
       .then(function(d){
-        if(!d.enabled || !d.jobId){ appendDiagLine('Deep discovery: disabled or failed to start'); return; }
+        if(!d.enabled || !d.jobId){ appendDiagLine('Deep discovery: disabled or failed to start'); maybeShowSingleSearchDiagnostic(searchSessionId); return; }
         appendDiagLine('Deep discovery: started (target '+(targetCount||25)+' jobs with real emails, this can take several minutes in the background)');
         var seenUrls = {};
         var poll = 0;
@@ -4900,23 +4973,24 @@
                   appendDiagLine('Deep discovery rounds: '+roundSummary+(status.roundsWithProviderFailure?' — '+status.roundsWithProviderFailure+' round(s) failed to search (provider error/timeout, not a real empty result)':''));
                 }
                 if(renderJobs.lastOk !== undefined) renderJobs(renderJobs.lastOk, renderJobs.lastSrcNames);
+                maybeShowSingleSearchDiagnostic(searchSessionId);
                 return;
               }
               if(poll < ASYNC_DISCOVERY_MAX_POLLS) setTimeout(checkStatus, ASYNC_DISCOVERY_POLL_MS);
-              else appendDiagLine('Deep discovery: stopped polling after the maximum wait — '+status.foundCount+' jobs found so far, job may still be finishing on the server');
+              else { appendDiagLine('Deep discovery: stopped polling after the maximum wait — '+status.foundCount+' jobs found so far, job may still be finishing on the server'); maybeShowSingleSearchDiagnostic(searchSessionId); }
             })
-            .catch(function(){ if(poll < ASYNC_DISCOVERY_MAX_POLLS) setTimeout(checkStatus, ASYNC_DISCOVERY_POLL_MS); }); // a single failed poll doesn't give up — just tries again next interval
+            .catch(function(){ if(poll < ASYNC_DISCOVERY_MAX_POLLS) setTimeout(checkStatus, ASYNC_DISCOVERY_POLL_MS); else maybeShowSingleSearchDiagnostic(searchSessionId); }); // a single failed poll doesn't give up — just tries again next interval
         }
         setTimeout(checkStatus, ASYNC_DISCOVERY_POLL_MS);
       })
-      .catch(function(e){ appendDiagLine('Deep discovery: failed to start — '+String(e.message||e).slice(0,150)); });
+      .catch(function(e){ appendDiagLine('Deep discovery: failed to start — '+String(e.message||e).slice(0,150)); maybeShowSingleSearchDiagnostic(searchSessionId); });
   }
   // Real ask: "give AI research more room to convert predicted emails to
   // real ones — I don't care about cost, it's permanent in cache." Same
   // async/polling pattern as discovery, but for EXISTING relevant jobs
   // that still only have a predicted email — updates them IN PLACE
   // (matching by URL) rather than adding new job cards.
-  function startAsyncEnrichment(jobs){
+  function startAsyncEnrichment(jobs, searchSessionId){
     // Real ask: given the real cost data ($0.96 in one day, well above a
     // sustainable pace), off-field jobs no longer get ANY AI email
     // enrichment at all — only same-field jobs matter enough to spend on.
@@ -4936,11 +5010,11 @@
       // inCountryCount tells the backend exactly where the in-country
       // slice ends, so it can structurally finish that phase before
       // starting MENA/remote — not just an ordering coincidence anymore.
-      body: JSON.stringify({ jobs: candidates, targetCount: candidates.length, inCountryCount: inCountry.length })
+      body: JSON.stringify({ jobs: candidates, targetCount: candidates.length, inCountryCount: inCountry.length, searchSessionId: searchSessionId||null })
     }, 45000) // same real fix as the discovery-start call above — real headroom for a cold-start backend, not just the fast-path assumption
       .then(function(r){ return r.ok ? r.json() : {enabled:false}; })
       .then(function(d){
-        if(!d.enabled || !d.jobId){ appendDiagLine('Predicted\u2192real email upgrade: disabled or failed to start'); return; }
+        if(!d.enabled || !d.jobId){ appendDiagLine('Predicted\u2192real email upgrade: disabled or failed to start'); maybeShowSingleSearchDiagnostic(searchSessionId); return; }
         appendDiagLine('Predicted\u2192real email upgrade: started ('+candidates.length+' same-field predicted-email jobs \u2014 '+inCountry.length+' in-country first, '+restRelevant.length+' MENA/remote after \u2014 off-field jobs skipped entirely, this can take several minutes in the background)');
         var appliedUrls = {};
         var poll = 0;
@@ -4974,16 +5048,17 @@
               if(status.status === 'complete' || status.status === 'failed'){
                 appendDiagLine('Predicted\u2192real email upgrade: '+status.status+(status.reason?' ('+status.reason+')':'')+' \u2014 '+status.foundCount+' total upgraded');
                 if(renderJobs.lastOk !== undefined) renderJobs(renderJobs.lastOk, renderJobs.lastSrcNames);
+                maybeShowSingleSearchDiagnostic(searchSessionId);
                 return;
               }
               if(poll < ASYNC_DISCOVERY_MAX_POLLS) setTimeout(checkStatus, ASYNC_DISCOVERY_POLL_MS);
-              else appendDiagLine('Predicted\u2192real email upgrade: stopped polling after the maximum wait \u2014 '+status.foundCount+' upgraded so far, job may still be finishing on the server');
+              else { appendDiagLine('Predicted\u2192real email upgrade: stopped polling after the maximum wait \u2014 '+status.foundCount+' upgraded so far, job may still be finishing on the server'); maybeShowSingleSearchDiagnostic(searchSessionId); }
             })
-            .catch(function(){ if(poll < ASYNC_DISCOVERY_MAX_POLLS) setTimeout(checkStatus, ASYNC_DISCOVERY_POLL_MS); });
+            .catch(function(){ if(poll < ASYNC_DISCOVERY_MAX_POLLS) setTimeout(checkStatus, ASYNC_DISCOVERY_POLL_MS); else maybeShowSingleSearchDiagnostic(searchSessionId); });
         }
         setTimeout(checkStatus, ASYNC_DISCOVERY_POLL_MS);
       })
-      .catch(function(e){ appendDiagLine('Predicted\u2192real email upgrade: failed to start \u2014 '+String(e.message||e).slice(0,150)); });
+      .catch(function(e){ appendDiagLine('Predicted\u2192real email upgrade: failed to start \u2014 '+String(e.message||e).slice(0,150)); maybeShowSingleSearchDiagnostic(searchSessionId); });
   }
   function sourceJobsPipe(q, countryIso){
     var base = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
@@ -5547,6 +5622,7 @@
     window.__googleJobsEmptyDebug = null;
     window.__jobsPipeEmptyDebug = null;
     window.__hireLebaneseDiag = null;
+    window.__daleelDiag = null;
     window.__webSearchDiag = null;
     window.__extraDiagLines = []; // reset per search — otherwise a new search's diagnostic line would start with every line accumulated from the previous one still attached
     window.__searchInProgress = true; // cleared by finalizeDiagLine() once the whole background pipeline genuinely finishes — see appendDiagLine's own comment
@@ -5569,6 +5645,14 @@
     document.getElementById('bubScan').textContent = 'querying sources\u2026';
 
     var c = curCountry();
+    // One shared id per user search, per explicit audit request — the
+    // four separate AI entry points (sync AI-Discovery, async deep
+    // discovery, async predicted-email upgrade, sync /ai-research) each
+    // generated their own disconnected random id before this, making it
+    // impossible to ever pull one real diagnostic for a single search.
+    var searchSessionId = 'sess_'+Date.now()+'_'+Math.random().toString(36).slice(2,8);
+    window.__lastSearchSessionId = searchSessionId; // exposed for manual lookup against /ai-search-diagnostics/<id>
+    window.__pendingAiPipelines = 2; // deep discovery + predicted-upgrade — the single-search diagnostic waits for both
     var named = [
       {n:'GoogleJobs', p:sourceGoogleJobs(q)},
       {n:'Jooble', p:sourceJooble(q, (curCity() ? curCity()+(c.gj?', '+c.gj:'') : (c.gj || '')))},
@@ -5585,6 +5669,7 @@
       {n:'RemoteJobs.org', p:new Promise(function(res){ setTimeout(function(){ res(sourceRemoteJobsOrg(q)); }, 600); }).then(function(p){ return p; })},
       {n:'JobsPipe', p:new Promise(function(res){ setTimeout(function(){ res(sourceJobsPipe(q, (c.v==='sa2'?'sa':(c.v==='remote'?'':c.v)))); }, 900); }).then(function(p){ return p; })},
       (c.v==='lb' ? {n:'HireLebanese', p:new Promise(function(res){ setTimeout(function(){ res(sourceHireLebanese(q)); }, 1200); }).then(function(p){ return p; })} : null),
+      (c.v==='lb' ? {n:'Daleel Madani', p:new Promise(function(res){ setTimeout(function(){ res(sourceDaleelMadani(q)); }, 1350); }).then(function(p){ return p; })} : null),
       {n:'WebSearch', p:new Promise(function(res){ setTimeout(function(){ res(sourceWebSearchJobs(q, curCity() || c.gj || '')); }, 1500); }).then(function(p){ return p; })},
       {n:'AI-Discovery', p:new Promise(function(res){ setTimeout(function(){
         // Real ask: "let it search wider for the same job" — if a specific
@@ -5593,7 +5678,7 @@
         // just declaring zero results from one narrow attempt.
         var cityLoc = curCity();
         var countryLoc = c.gj || '';
-        res(sourceAiDiscoveredJobs(q, cityLoc || countryLoc || '', cityLoc ? countryLoc : ''));
+        res(sourceAiDiscoveredJobs(q, cityLoc || countryLoc || '', cityLoc ? countryLoc : '', searchSessionId));
       }, 1800); }).then(function(p){ return p; })}
     ];
     // Bounded query-expansion pass — see getSynonymForQuery's own comment.
@@ -5643,6 +5728,19 @@
       var rawJobsCount = jobs.length; // before dedup — total raw jobs across every source, duplicates included
       jobs = dedupeJobs(jobs).filter(function(j){ return !j.date || daysAgo(j.date) <= 20; });
       var uniqueJobsCount = jobs.length; // after dedup, still includes off-field "stretch" fillers at this point
+
+      // Real audit deliverable: "Initial sources: X jobs" in the single-
+      // search diagnostic is a number that only ever existed client-side
+      // — the backend has no visibility into it at all. Reported once,
+      // fire-and-forget, right at the point where the combined source
+      // pool is final but before any AI enrichment has touched it.
+      try{
+        var base0 = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
+        fetch(base0+'/ai-search-marker', {
+          method:'POST', headers: backendHeaders({'Content-Type':'application/json'}),
+          body: JSON.stringify({ searchSessionId: searchSessionId, query: q, location: c.label||c.v, initialJobCount: uniqueJobsCount })
+        }).catch(function(){});
+      }catch(e){}
 
       function processAndFinish(list, widened){
         if(c.keys.length){
@@ -5835,9 +5933,18 @@
         var wsStillNeedsRealScan = allJobs.filter(function(j){
           return j.src && j.src.indexOf('WebSearch')===0 && (!j.email || j.emailPredicted);
         });
+        // Daleel Madani's listing page gives no company/email at all —
+        // its job pages are the real source, same principle as WebSearch
+        // (Serper only returns a snippet, the actual email lives on the
+        // real page). NGO postings on this kind of site very commonly
+        // print a direct "send CV to X@Y.org" instruction in the body.
+        var daleelStillNeedsRealScan = allJobs.filter(function(j){
+          return j.src && j.src.indexOf('Daleel Madani')===0 && (!j.email || j.emailPredicted);
+        });
         Promise.all([
           backgroundPageScanBySource(hlStillNeedsRealScan, 'HireLebanese'),
-          backgroundPageScanBySource(wsStillNeedsRealScan, 'WebSearch')
+          backgroundPageScanBySource(wsStillNeedsRealScan, 'WebSearch'),
+          backgroundPageScanBySource(daleelStillNeedsRealScan, 'Daleel Madani')
         ]).then(function(){
           // Real ask: AI title classification runs FIRST in this chain,
           // before email enrichment — jobs it promotes from "different
@@ -5855,7 +5962,7 @@
             // layer above still couldn't find an email for. Genuinely
             // zero-cost when OPENAI_RESEARCH_ENABLED is off — the backend
             // returns instantly. Respects shadow mode entirely on its own.
-            return runAiResearch(allJobs, 'search_'+Date.now());
+            return runAiResearch(allJobs, 'search_'+Date.now(), searchSessionId);
           }).then(function(){
             buildProductionDiagnosticReport(allJobs, rawJobsCount, uniqueJobsCount);
             finalizeDiagLine(); // the one, true end of the pipeline — reveals the complete diagnostic in a single stable update, replacing the "still working" placeholder
@@ -5875,12 +5982,12 @@
           // Real ask: give AI-Discovery the same multi-city breadth
           // deepScan already has (CITY_FANOUT), rather than only ever
           // searching whatever single location is currently selected.
-          startAsyncDiscovery(q, curCity() || c.gj || '', 25, CITY_FANOUT[c.v] || []);
+          startAsyncDiscovery(q, curCity() || c.gj || '', 25, CITY_FANOUT[c.v] || [], searchSessionId);
           // Real ask: give the SAME safe async treatment to upgrading
           // predicted emails on EXISTING relevant jobs, not just finding
           // NEW ones — genuinely independent, no timeout ceiling, runs
           // alongside deep discovery above.
-          startAsyncEnrichment(allJobs);
+          startAsyncEnrichment(allJobs, searchSessionId);
         });
         setTimeout(autoDiscoverFromResults, 400); // quiet background check, never blocks the UI
         if(fails.length){
