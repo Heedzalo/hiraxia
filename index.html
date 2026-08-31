@@ -2789,6 +2789,34 @@
   // completely missed, forcing the user to read the whole posting and compose
   // an email by hand for something Hiraxia's own Gmail-draft flow already handles.
   var GENERIC_EMAIL_PATTERNS = /^(noreply|no-reply|donotreply|info@example|test@|name@domain|your@email|user@domain|user@example|email@example|email@site|example@example|xxx@xxx|someone@|firstname\.?lastname@|first\.?last@|yourname@)/i;
+  // Shared across every place that propagates a found email to other jobs
+  // by matching on company name (same-employer match, sibling propagation
+  // in the Hunter/domain-scan pass, etc.) — a "company" that's actually a
+  // generic aggregator/listing-site label (e.g. "Jobs for Lebanon",
+  // "jobs-in-lebanon") is NOT one real employer, so an email found for
+  // ONE job under that label must never spread to other jobs sharing it.
+  // Was previously defined separately inside findCompanyThenEmail only —
+  // duplicating it here would have let it drift out of sync (exactly
+  // what happened: a second propagation path had zero protection at all).
+  // Real bug found via user report: "jobs-in-lebanon" (hyphenated, no
+  // spaces) slipped through the original regex, which required a literal
+  // space after "jobs" ("jobs in", "jobs for") — normalizing hyphens/
+  // underscores to spaces before testing catches this and any future
+  // hyphenated variant of the same pattern.
+  var GENERIC_COMPANY_NAME = /^(jobs? (for|in|at)|careers? (in|at)|(job )?opportunities( in| at)?|hiring (in|at)|vacanc(y|ies)( in| for)?)\b/i;
+  // Real, confirmed case from repeated evidence across this whole
+  // session: "We" has shown up as the "company" for many completely
+  // unrelated real jobs (driver, accountant, procurement...) — the
+  // same generic-label risk as "Jobs for Lebanon", just not caught
+  // by the pattern above since it doesn't start with a job-board-
+  // style prefix. Added as an explicit, known case rather than a
+  // broader "short company name" heuristic that risks excluding
+  // real, legitimately short company names.
+  var KNOWN_GENERIC_COMPANY_NAMES = ['we'];
+  function isGenericCompanyName(key){
+    var normalized = String(key||'').replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim();
+    return GENERIC_COMPANY_NAME.test(normalized) || KNOWN_GENERIC_COMPANY_NAMES.indexOf(normalized) > -1;
+  }
   // ^ real bug found tonight: a vision model reading a screenshot returned
   // "name@domain.com" as if it were a real found email — almost certainly
   // mistaking a form field's placeholder/hint text ("e.g. name@domain.com")
@@ -2896,7 +2924,7 @@
     // certainly a general-inquiries line, not a recruiting inbox. These weak,
     // context-free prefixes are blocked from the fallback specifically —
     // they're still fine higher up if genuinely tied to "send your CV to X".
-    if(/^(contact|info|support|sales|hello|media|press|marketing|admin|office)@/i.test(m[0])) return null;
+    if(/^(contact|info|support|sales|hello|media|press|marketing|admin|office|feedback)@/i.test(m[0])) return null;
     // Real bug found via user report: reportfraud@pvh.com was actually
     // surfaced as a "recruiter email found." This exclusion existed in the
     // backend's extraction function but this is a completely separate
@@ -3775,17 +3803,17 @@
       // entirely. Excluded from propagation (the email still applies
       // correctly to the ONE job it was actually found for, just never
       // spreads to others under the same generic label).
-      var GENERIC_COMPANY_NAME = /^(jobs? (for|in|at)|careers? (in|at)|(job )?opportunities( in| at)?|hiring (in|at)|vacanc(y|ies)( in| for)?)\b/i;
-      // Real, confirmed case from repeated evidence across this whole
-      // session: "We" has shown up as the "company" for many completely
-      // unrelated real jobs (driver, accountant, procurement...) — the
-      // same generic-label risk as "Jobs for Lebanon", just not caught
-      // by the pattern above since it doesn't start with a job-board-
-      // style prefix. Added as an explicit, known case rather than a
-      // broader "short company name" heuristic that risks excluding
-      // real, legitimately short company names.
-      var KNOWN_GENERIC_COMPANY_NAMES = ['we'];
-      function isGenericCompanyName(key){ return GENERIC_COMPANY_NAME.test(key) || KNOWN_GENERIC_COMPANY_NAMES.indexOf(key) > -1; }
+      // Real bug found via user report: "jobs-in-lebanon" (hyphenated, no
+      // spaces) slipped straight through this exact guard — the regex
+      // requires a literal space after "jobs" ("jobs in", "jobs for"),
+      // so a hyphenated aggregator-style label matched nothing and was
+      // treated as a real, specific employer. The result: one real email
+      // found for ONE job (actually posted by a specific recruiter named
+      // in the job title, e.g. "Michael Page") got propagated to ~20
+      // completely unrelated law-firm jobs that only shared this same
+      // generic "jobs-in-lebanon" listing-site label. Now uses the
+      // shared, top-level isGenericCompanyName (see its own comment) —
+      // fixed once, in one place, instead of two definitions drifting.
       var byCompany = {};
       candidates.forEach(function(c){
         var key = (c.company||'').toLowerCase().trim();
@@ -4227,7 +4255,13 @@
     // name" genuinely means every one of them, not just the one that
     // happened to be the dedup representative.
     function applyToCompanySiblings(companyKey, email, srcSuffix){
-      if(!companyKey || !email) return;
+      // Real bug found via user report (jobs-in-lebanon / ~20 unrelated
+      // law-firm jobs all getting the same wrong email): the exact same
+      // risk exists here as in the same-employer-match step above — a
+      // generic aggregator-label "company" is never one real employer,
+      // so this must never propagate under one. Uses the shared,
+      // top-level isGenericCompanyName guard (see its own comment).
+      if(!companyKey || !email || isGenericCompanyName(companyKey)) return;
       jobs.forEach(function(sib){
         if(sib.email) return;
         if((sib.company||'').toLowerCase().trim() !== companyKey) return;
