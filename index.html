@@ -3141,7 +3141,20 @@
       // the FULL job-board list, not just LinkedIn, after remotive.com showed the
       // same bug tonight for every source Hiraxia itself aggregates from.
       if(JOB_BOARD_DOMAINS.test(j.url)) return false;
-      var domain = guessDomainFromUrl(j.url) || (function(){ try{ return new URL(j.url).hostname; }catch(e){ return null; } })();
+      var domain = guessDomainFromUrl(j.url) || (function(){
+        // Real bug found via user report: a Chuk et Luc job showed an
+        // email that actually belonged to BAYT. guessDomainFromUrl
+        // deliberately returns null for an aggregator host, but this
+        // fallback then handed back the raw hostname anyway — so the
+        // scan read bayt.com's own contact address and cached it as
+        // that employer's. The aggregator guard is now respected here
+        // too: a job hosted on a board simply has no scannable
+        // employer domain from its URL alone.
+        try{
+          var h = new URL(j.url).hostname.replace(/^www\./,'');
+          return isKnownAggregatorDomain(h) ? null : h;
+        }catch(e){ return null; }
+      })();
       var cached = domain && emailCacheGet(domain);
       if(cached){ j.email = cached.email; j.src = (j.src||'') + ' (email via learned cache)'; return false; }
       return true;
@@ -3172,7 +3185,14 @@
           if(email){
             j.email = email; found++;
             j.src = (j.src||'') + ' (email via screenshot)';
-            if(host) emailCacheSet(guessDomainFromUrl(j.url) || host, email, true); // genuinely visible in the actual screenshot, not a guess — learn it, forever
+            // Same aggregator leak as the scan fallbacks above, but on the
+            // WRITE side and therefore worse: caching an email under a
+            // job-board host (bayt.com, linkedin.com) pollutes the shared,
+            // permanent company cache, so every later job resolving to
+            // that host inherits the board's own address as if it were the
+            // employer's. Only a genuine employer domain is cached now.
+            var cacheDomain = guessDomainFromUrl(j.url);
+            if(cacheDomain) emailCacheSet(cacheDomain, email, true); // genuinely visible in the actual screenshot, not a guess — learn it, forever
           } else {
             errors.push((host||'?')+': no email visible in screenshot');
           }
@@ -3262,7 +3282,20 @@
       // everywhere else now. A page scan needs a URL to fetch, so that
       // requirement genuinely stays; the ATS exclusion does not.
       if(j.email || !j.url) return false;
-      var domain = guessDomainFromUrl(j.url) || (function(){ try{ return new URL(j.url).hostname; }catch(e){ return null; } })();
+      var domain = guessDomainFromUrl(j.url) || (function(){
+        // Real bug found via user report: a Chuk et Luc job showed an
+        // email that actually belonged to BAYT. guessDomainFromUrl
+        // deliberately returns null for an aggregator host, but this
+        // fallback then handed back the raw hostname anyway — so the
+        // scan read bayt.com's own contact address and cached it as
+        // that employer's. The aggregator guard is now respected here
+        // too: a job hosted on a board simply has no scannable
+        // employer domain from its URL alone.
+        try{
+          var h = new URL(j.url).hostname.replace(/^www\./,'');
+          return isKnownAggregatorDomain(h) ? null : h;
+        }catch(e){ return null; }
+      })();
       var cached = domain && emailCacheGet(domain);
       if(cached){ j.email = cached.email; j.src = (j.src||'') + ' (email via learned cache)'; return false; }
       return true;
@@ -3280,7 +3313,20 @@
           if(d.email){
             j.email = d.email; found++;
             j.src = (j.src||'') + ' (email via backend)';
-            var domain = guessDomainFromUrl(j.url) || (function(){ try{ return new URL(j.url).hostname; }catch(e){ return null; } })();
+            var domain = guessDomainFromUrl(j.url) || (function(){
+        // Real bug found via user report: a Chuk et Luc job showed an
+        // email that actually belonged to BAYT. guessDomainFromUrl
+        // deliberately returns null for an aggregator host, but this
+        // fallback then handed back the raw hostname anyway — so the
+        // scan read bayt.com's own contact address and cached it as
+        // that employer's. The aggregator guard is now respected here
+        // too: a job hosted on a board simply has no scannable
+        // employer domain from its URL alone.
+        try{
+          var h = new URL(j.url).hostname.replace(/^www\./,'');
+          return isKnownAggregatorDomain(h) ? null : h;
+        }catch(e){ return null; }
+      })();
             if(domain) emailCacheSet(domain, d.email, true); // /extract-email finds a real, explicit email on the actual page — not a guess
           } else { errors++; }
         })
@@ -3882,15 +3928,37 @@
                domainVerified: !!(j._domainVerified || guessDomainFromUrl(j.url)),
                emailHypotheses: j.emailHypotheses || [] };
     });
-    return fetchWithTimeout(base+'/ai-research', {
-      method:'POST', headers: backendHeaders({'Content-Type':'application/json'}),
-      body: JSON.stringify({ jobs: payload, searchId: searchId || ('search_'+Date.now()), searchSessionId: searchSessionId||null })
-    }, 420000) // raised 240s->420s alongside the 40->60 job cap and the larger per-job tool budget: 60 jobs at 15-concurrent is 4 waves of genuinely multi-round research. Still just a client-side cap — it doesn't control any platform-level timeout on Render's side, so a slower run can still be cut off upstream.
+    // Real failure seen live: "AI research: request failed — Failed to
+    // fetch", with Jooble/HireLebanese/Daleel/JobsPipe all returning 0 in
+    // the same run — every backend-dependent call failing together, i.e.
+    // the instance was briefly unreachable (Render restart or cold spin-
+    // up), not a bad request. Every source has its own per-source retry
+    // or degrades to zero, but AI research gave up after ONE attempt and
+    // took the entire search's email discovery down with it. It is the
+    // single highest-value call in the pipeline, so it now retries a
+    // genuinely transient network failure. A real HTTP error status is
+    // NOT retried — that's a definite answer, not a fluke.
+    function postAiResearch(attempt){
+      return fetchWithTimeout(base+'/ai-research', {
+        method:'POST', headers: backendHeaders({'Content-Type':'application/json'}),
+        body: JSON.stringify({ jobs: payload, searchId: searchId || ('search_'+Date.now()), searchSessionId: searchSessionId||null })
+      }, 420000) // raised 240s->420s alongside the 40->60 job cap and the larger per-job tool budget: 60 jobs at 15-concurrent is 4 waves of genuinely multi-round research. Still just a client-side cap — it doesn't control any platform-level timeout on Render's side, so a slower run can still be cut off upstream.
+        .catch(function(e){
+          if(attempt >= 2) throw e; // 3 attempts total, then report honestly
+          appendDiagLine('AI research: connection failed, retrying ('+(attempt+2)+'/3)\u2026');
+          return new Promise(function(res){ setTimeout(res, 2000 * (attempt+1)); }).then(function(){ return postAiResearch(attempt+1); });
+        });
+    }
+    return postAiResearch(0)
       .then(function(r){ return r.ok ? r.json() : {enabled:false, results:[]}; })
       .then(function(d){
         if(!d.enabled){ window.__aiResearchDebug = 'AI research: disabled (OPENAI_RESEARCH_ENABLED not set)'; return; }
         var found = d.results.filter(function(r){ return r.email; });
         window.__aiResearchDebug = 'AI research: mode='+d.mode+', researched '+d.researched+', found '+found.length+' real email(s)'+
+          // Real visibility for the batch-deadline fix: a partial result is
+          // a very different outcome from a complete one that found little,
+          // and previously they looked identical.
+          (d.partial ? ' \u00b7 PARTIAL: '+d.skippedForTime+' job(s) skipped to stay inside the time budget (they stay eligible for background enrichment)' : '')+
           (d.mode==='shadow' ? ' (SHADOW MODE — logged only, not applied to results below)' : '');
         console.log(window.__aiResearchDebug, d.results);
 
@@ -4371,7 +4439,12 @@
           try{
             var real = decodeURIComponent(matches[i].replace('uddg=',''));
             var host = new URL(real).hostname.replace(/^www\./,'');
-            if(!NOT_A_COMPANY_SITE.test(host) && !/duckduckgo\.com/i.test(host)){
+            // Aggregator guard added after a real report (a Chuk et Luc job
+            // showing a Bayt email): searching "<company> official website"
+            // very often surfaces the company's BAYT or LinkedIn listing
+            // above its own site, and returning that host made the job
+            // board the "employer domain" for every downstream stage.
+            if(!NOT_A_COMPANY_SITE.test(host) && !/duckduckgo\.com/i.test(host) && !isKnownAggregatorDomain(host)){
               window.__ddgDebug = 'DuckDuckGo: found a result for '+companyName;
               return host;
             }
@@ -4605,7 +4678,7 @@
       .catch(function(e){ window.__anymailDebug = 'Anymail: '+String(e.message||e).slice(0,100); return null; });
   }
 
-  function scanHomepageForEmail(domain){
+  function scanHomepageForEmail(domain, locationHint){
     if(!domain) return Promise.resolve(null);
     // Moved server-side: the old client version depended on a free public CORS
     // relay (allorigins.win) that kept 403'ing under load. This also now tries
@@ -4614,7 +4687,10 @@
     var base = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
     return fetchWithTimeout(base+'/scan-website-email', {
       method:'POST', headers: backendHeaders({'Content-Type':'application/json'}),
-      body: JSON.stringify({ domain: domain })
+      // locationHint = the JOB's location, so a multi-branch employer's
+      // wrong-city office isn't returned (real bug: a Beirut Kempinski job
+      // was given gso.frankfurt@kempinski.com, the Frankfurt sales office).
+      body: JSON.stringify({ domain: domain, locationHint: locationHint || '' })
     }, 15000)
       .then(function(r){ return r.ok ? r.json() : {email:''}; })
       .then(function(d){ return (d && d.email) ? d.email : null; })
@@ -4646,7 +4722,11 @@
           if(!u) continue;
           try{
             var host = new URL(u).hostname.replace(/^www\./,'');
-            if(!NOT_A_COMPANY_SITE.test(host)){
+            // Same aggregator guard as the DuckDuckGo finder — a company's
+            // Bayt/LinkedIn listing frequently outranks its own website for
+            // "<company> official website", and taking that host makes the
+            // job board the employer domain for every later stage.
+            if(!NOT_A_COMPANY_SITE.test(host) && !isKnownAggregatorDomain(host)){
               window.__braveDebug = 'Brave: found a result for '+companyName;
               return host;
             }
@@ -4675,7 +4755,11 @@
           try{
             var host = new URL(u).hostname.replace(/^www\./,'');
             // skip directories/aggregators/socials that outrank real company sites
-            if(!NOT_A_COMPANY_SITE.test(host)) return host;
+            // (the comment already claimed this, but the aggregator half of
+            // the check was missing — job boards were being returned as
+            // employer domains, which is how a Bayt email ended up attached
+            // to a Chuk et Luc job)
+            if(!NOT_A_COMPANY_SITE.test(host) && !isKnownAggregatorDomain(host)) return host;
           }catch(e){}
         }
         return null;
@@ -4797,7 +4881,7 @@
           errors.push((j.company||'?')+': no domain found (backend tried Tavily\u2192Brave\u2192DuckDuckGo)');
           return { job: j, domain: null };
         }
-        return scanHomepageForEmail(domain).then(function(pageEmail){
+        return scanHomepageForEmail(domain, j.loc || '').then(function(pageEmail){
           if(pageEmail){
             j.email = pageEmail; found++;
             j.src = (j.src||'') + ' (email via homepage scan)';
