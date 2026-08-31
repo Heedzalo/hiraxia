@@ -3135,7 +3135,7 @@
       // job-board skip below genuinely stays (confirmed by real testing:
       // aggregator pages never show a contact email, so screenshotting
       // them is a guaranteed-wasted call).
-      if(j.email || !j.url) return false;
+      if((j.email && !j.emailPredicted) || !j.url) return false; // predicted guesses stay eligible for a real find
       // confirmed via real testing tonight: LinkedIn job pages never show a contact
       // email — screenshotting them is a guaranteed-wasted call every time. Now uses
       // the FULL job-board list, not just LinkedIn, after remotive.com showed the
@@ -3281,7 +3281,7 @@
       // URL-less jobs from page scanning even though they're eligible
       // everywhere else now. A page scan needs a URL to fetch, so that
       // requirement genuinely stays; the ATS exclusion does not.
-      if(j.email || !j.url) return false;
+      if((j.email && !j.emailPredicted) || !j.url) return false; // predicted guesses stay eligible for a real find
       var domain = guessDomainFromUrl(j.url) || (function(){
         // Real bug found via user report: a Chuk et Luc job showed an
         // email that actually belonged to BAYT. guessDomainFromUrl
@@ -3629,9 +3629,21 @@
       // to the research engine, never outputs of it.
       j.emailHypotheses = buildEmailHypotheses(domain);
       j.predictedEmail = j.emailHypotheses[0];
+      // Per explicit product decision: a predicted email is USABLE again.
+      // It is populated into j.email so the job shows as email-apply and
+      // the user can act on it, rather than sitting in a "researching"
+      // limbo that produced pages with nothing to apply to. The honesty
+      // machinery is all kept: emailPredicted stays true, the card and the
+      // apply modal both label it as an unverified guess, it is excluded
+      // from "real emails found" metrics, and it remains fully eligible
+      // for research that can upgrade it to an evidence-backed address.
+      // The rule that still holds absolutely: research NEVER promotes a
+      // guess to RESEARCHED/VERIFIED without real evidence — see the
+      // backend's validation layers. Predicted is shown, not believed.
+      j.email = j.predictedEmail;
       j.emailPredicted = true;   // retained: every downstream research/priority path keys off this flag
       j.emailConfidence = 'PREDICTED';
-      j.emailReady = false;
+      j.emailReady = false;      // still false: this is not evidence-backed
       j.src = (j.src||'') + ' (predicted from company name — not verified)';
       j._lastResortDomain = domain; // the domain the hypotheses were built from — handed to AI research as a real starting point
       // CRITICAL distinction, added after a real regression: a domain
@@ -3677,6 +3689,11 @@
   function backgroundPageScanBySource(jobs, srcPrefix){
     var matching = jobs.filter(function(j){ return j.src && j.src.indexOf(srcPrefix)===0 && j.url; });
     if(!matching.length) return Promise.resolve();
+    // Now that EVERY source feeds this (not just three named ones), a
+    // per-source bound keeps a single huge source from monopolising the
+    // background window. Relevance-ordered first, so the cap falls on the
+    // least relevant jobs rather than on whichever happened to be last.
+    matching = orderForEmailDiscovery(matching).slice(0, 40);
     return runWithConcurrency(matching, 3, function(j){
       return relayFetchText(j.url).then(function(html){
         var found = extractEmailFromText(html, true); // strict — only a real, explicit apply instruction counts
@@ -3684,7 +3701,14 @@
           j.email = found;
           j.emailPredicted = false;
           j.emailVerified = false; // a real instruction, not pattern-verified, but not a guess either — tagged distinctly below
-          j.src = (j.src||'').replace(' (predicted from company name — not verified)', ' (email via job page)');
+          // An explicit "send your CV to X" printed in the posting itself
+          // is genuine evidence — recorded like any other researched find
+          // so it ranks as confirmed and shows its provenance.
+          j.emailConfidence = 'RESEARCHED';
+          j.emailReady = true;
+          j.emailEvidence = 'apply-by-email instruction found in the job posting itself';
+          j.emailSource = j.url;
+          j.src = (j.src||'').replace(' (predicted from company name — not verified)', '') + ' (email via job page)';
           delete j._lastResortDomain; // found a real email — no need for the pattern-check verification pass afterward
         }
       }).catch(function(){}); // a failed fetch here just leaves the existing weak guess in place — never worse off than before
@@ -3842,7 +3866,10 @@
       }
       return p;
     }
-    var candidates = jobs.filter(function(j){ return !j.email; }); // a job with a REAL email needs no research; predicted ones have j.email null by design and stay eligible
+    // Predicted emails now populate j.email so they're usable, so the
+    // eligibility test must explicitly keep them in: only an
+    // evidence-backed address means there is nothing left to research.
+    var candidates = jobs.filter(function(j){ return !j.email || j.emailPredicted; });
     // Hard floor: never spend a research request on something that is
     // barely relevant, no matter how many hypotheses it carries.
     var MIN_RESEARCH_PRIORITY = 0;
@@ -3861,8 +3888,8 @@
     var isCoreTarget = function(j){ return !j.isStretch && geoMatchStrict(j.loc, cR) && !j.usNamesake; };
     var coreTargets = passedThreshold.filter(isCoreTarget);
     var rest = passedThreshold.filter(function(j){ return !isCoreTarget(j); });
-    var RESEARCH_CAP = 60;              // matches the backend's per-search cap
-    var CORE_GUARANTEE = 40;            // explicit goal: 40 in-country, on-role jobs researched per search
+    var RESEARCH_CAP = 30;              // matches the backend's per-search cap (pulled back from 60 after out-of-memory kills took the whole backend down mid-search)
+    var CORE_GUARANTEE = 25;            // in-country on-role jobs get first claim on the 30 slots; the rest go to MENA/remote
     var coreSlice = coreTargets.slice(0, Math.max(CORE_GUARANTEE, 0));
     var selected = coreSlice.concat(rest.slice(0, Math.max(0, RESEARCH_CAP - coreSlice.length)));
     // BIG speed/cost win, no loss of emails: research is per-EMPLOYER, not
@@ -3912,6 +3939,10 @@
       return Promise.resolve();
     }
     appendDiagLine(window.__researchCoverage);
+    // Transparency for the off-field drop: these jobs are deliberately not
+    // shown, so say so rather than leaving the user to wonder where a
+    // shorter list came from.
+    if(window.__offFieldDropped) appendDiagLine('Off-field jobs hidden: '+window.__offFieldDropped+' (only the searched role is shown \u2014 in-country first, then MENA)');
     var base = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
     var payload = stillNeedEmail.map(function(j){
       // Hypotheses and the known domain are handed to the research engine
@@ -4804,7 +4835,7 @@
     // already have a real email (nothing left to find) or have neither a
     // usable domain nor a real company name (nothing to search against).
     var eligible = jobs.filter(function(j){
-      if(j.email) return false;
+      if(j.email && !j.emailPredicted) return false; // a predicted guess is still worth trying to replace with a real find
       return !!(guessDomainFromUrl(j.url) || (j.company && !GENERIC_COMPANY_NAMES.test(j.company)));
     });
     var seenCompanies = {};
@@ -5091,28 +5122,23 @@
   function applyLocationMix(list){
     var c = curCountry();
     var primary = list.filter(function(j){ return !j.isStretch; }); // already score-sorted, since list was sorted before this runs
-    var secondary = list.filter(function(j){ return j.isStretch; });
-    var inCountry = primary.filter(function(j){ return geoMatchStrict(j.loc, c); });
-    var menaOrRemote = primary.filter(function(j){ return !geoMatchStrict(j.loc, c); });
-    var targetInCountry = Math.min(inCountry.length, Math.round(primary.length * 0.75));
-    var mixed = inCountry.slice(0, targetInCountry);
-    var remainingSlots = primary.length - mixed.length;
-    mixed = mixed.concat(menaOrRemote.slice(0, remainingSlots));
-    // Anything left over (in-country beyond the target, or MENA/remote
-    // beyond what was needed to fill) still appears — nothing is hidden.
-    var usedInCountry = inCountry.slice(0, targetInCountry);
-    var usedMenaRemote = menaOrRemote.slice(0, remainingSlots);
-    var leftover = inCountry.slice(usedInCountry.length).concat(menaOrRemote.slice(usedMenaRemote.length));
-    leftover.sort(function(a,b){ return b.score - a.score; });
-    // Real ask: within "different field" (genuinely off-topic jobs),
-    // MENA-region ones should surface before fully unrelated-region ones
-    // — reuses the same menaMatch already used by the filter tabs, so
-    // "MENA" means the same thing here as it does everywhere else in the
-    // app. Score-order is preserved within each group; this only
-    // reorders which group comes first, never hides anything.
-    var secondaryMena = secondary.filter(function(j){ return menaMatch(j.loc) || geoMatchStrict(j.loc, c); });
-    var secondaryOther = secondary.filter(function(j){ return !(menaMatch(j.loc) || geoMatchStrict(j.loc, c)); });
-    return mixed.concat(leftover).concat(secondaryMena).concat(secondaryOther);
+    // Per explicit instruction: off-field jobs are no longer shown at all.
+    // They used to be appended as "Other openings near you" to fill space,
+    // but a chef search returning remote SRE and SAP roles is noise, and
+    // worse, those fillers consumed real slots, ranking attention and (via
+    // earlier stages) enrichment effort. Hiraxia now concerns itself only
+    // with the role actually searched for: in-country first, then MENA.
+    // Nothing is "hidden" that the user wanted — an off-field job was
+    // never something they asked for.
+    var dropped = list.length - primary.length;
+    window.__offFieldDropped = dropped;
+    var inCountry = primary.filter(function(j){ return geoMatchStrict(j.loc, c) && !j.usNamesake; });
+    var rest = primary.filter(function(j){ return !(geoMatchStrict(j.loc, c) && !j.usNamesake); });
+    // Within the non-local remainder, MENA before anywhere else — same
+    // menaMatch the filter tabs use, so "MENA" means one thing app-wide.
+    var mena = rest.filter(function(j){ return menaMatch(j.loc); });
+    var elsewhere = rest.filter(function(j){ return !menaMatch(j.loc); });
+    return inCountry.concat(mena).concat(elsewhere);
   }
   function logRelevanceDiagnostics(jobs){
     var q = document.getElementById('jobQuery').value.trim();
@@ -6557,25 +6583,29 @@
           // since Serper only ever returns a title/snippet, never a real
           // email on its own — the actual email only ever comes from reading
           // the real page directly, same as the proven HireLebanese approach.
-          var hlStillNeedsRealScan = allJobs.filter(function(j){
-            return j.src && j.src.indexOf('HireLebanese')===0 && (!j.email || j.emailPredicted);
+          // Per explicit instruction: EVERY job still lacking a confirmed
+          // email gets its real page read — not just three named sources.
+          // This was previously hardcoded to HireLebanese / WebSearch /
+          // Daleel Madani, so a platform-apply job from Jooble, ReliefWeb,
+          // Greenhouse, Lever, Remotive, Himalayas, RemoteJobs, Arbeitnow
+          // or AI-Discovery never had its posting text read at all — even
+          // though the "send your CV to X@Y" instruction very often sits
+          // in the body of exactly those postings. Predicted-email jobs
+          // are included too, so a guess can be replaced by a real address
+          // found on the page.
+          var stillNeedsRealScan = allJobs.filter(function(j){
+            return j.url && (!j.email || j.emailPredicted);
           });
-          var wsStillNeedsRealScan = allJobs.filter(function(j){
-            return j.src && j.src.indexOf('WebSearch')===0 && (!j.email || j.emailPredicted);
+          // Grouped by source purely so the diagnostics stay readable and
+          // per-source failures remain visible, exactly as before.
+          var scanGroups = {};
+          stillNeedsRealScan.forEach(function(j){
+            var srcName = String(j.src||'other').split(' ')[0].split('\u00b7')[0] || 'other';
+            (scanGroups[srcName] = scanGroups[srcName] || []).push(j);
           });
-          // Daleel Madani's listing page gives no company/email at all —
-          // its job pages are the real source, same principle as WebSearch
-          // (Serper only returns a snippet, the actual email lives on the
-          // real page). NGO postings on this kind of site very commonly
-          // print a direct "send CV to X@Y.org" instruction in the body.
-          var daleelStillNeedsRealScan = allJobs.filter(function(j){
-            return j.src && j.src.indexOf('Daleel Madani')===0 && (!j.email || j.emailPredicted);
-          });
-          Promise.all([
-            backgroundPageScanBySource(hlStillNeedsRealScan, 'HireLebanese'),
-            backgroundPageScanBySource(wsStillNeedsRealScan, 'WebSearch'),
-            backgroundPageScanBySource(daleelStillNeedsRealScan, 'Daleel Madani')
-          ]).then(function(){
+          Promise.all(Object.keys(scanGroups).map(function(srcName){
+            return backgroundPageScanBySource(scanGroups[srcName], srcName);
+          })).then(function(){
             // Real ask: AI title classification runs FIRST in this chain,
             // before email enrichment — jobs it promotes from "different
             // field" to relevant should then correctly benefit from the
@@ -6988,15 +7018,11 @@
       if(geoView==='mena') return menaMatch(j.loc) || geoMatchStrict(j.loc, c2);
       if(geoView==='remote') return isRemoteish(j.loc) && !isFakeRemote(j); // a mislabeled on-site role isn't a real remote job — see isFakeRemote
       if(geoView==='email') return !!j.email;
-      // Real bug found via user report: the "different field" section was
-      // showing jobs from Dubai/Saudi Arabia/Canada/Brazil/etc. labeled
-      // "near you" for a Lebanon search — role-irrelevant jobs were never
-      // filtered by location at all, just dumped in regardless of where
-      // in the world they actually were. A job that's neither role-
-      // relevant NOR anywhere near the searched location has no honest
-      // reason to be shown at all — this is the actual fix, not just a
-      // relabel: genuinely unrelated-everything jobs are dropped here.
-      if(j.isStretch) return geoMatchStrict(j.loc, c2) || menaMatch(j.loc) || (isRemoteish(j.loc) && !isFakeRemote(j));
+      // Per explicit instruction: off-field jobs are not shown at all.
+      // applyLocationMix already removes them, so this is a belt-and-braces
+      // guard for any path that reaches renderJobs without going through
+      // it. Hiraxia shows only the role that was actually searched for.
+      if(j.isStretch) return false;
       return true;
     });
     if(!view.length && allJobs.length){
@@ -7014,8 +7040,9 @@
     // one with an email, so this sorts WITHIN the existing bands rather
     // than above them.
     view = view.slice().sort(function(a,b){
-      var aS = a.isStretch?1:0, bS = b.isStretch?1:0;
-      if(aS !== bS) return aS - bS;                      // relevance band first
+      // Off-field jobs no longer exist in the list at all (see
+      // applyLocationMix), so the old relevance-band tier is gone —
+      // country is now the first tier outright.
       // Per explicit instruction: the searched country always comes first
       // within a relevance band. Country was not a sort key at all before,
       // which is how Riyadh and remote listings kept landing above real
@@ -7025,8 +7052,13 @@
       var aC = (geoMatchStrict(a.loc, c2) && !a.usNamesake) ? 0 : 1;
       var bC = (geoMatchStrict(b.loc, c2) && !b.usNamesake) ? 0 : 1;
       if(aC !== bC) return aC - bC;                      // then in-country
-      var aE = a.email?0:1, bE = b.email?0:1;
-      if(aE !== bE) return aE - bE;                      // then email-ready
+      // Three tiers now, not two: an evidence-backed email beats a
+      // predicted guess, which still beats no email at all. Predicted
+      // jobs are usable, so they rank above platform-apply — but never
+      // above a confirmed address.
+      var rank = function(j){ return (j.email && !j.emailPredicted) ? 0 : (j.email ? 1 : 2); };
+      var aE = rank(a), bE = rank(b);
+      if(aE !== bE) return aE - bE;
       return (b.score - a.score) || ((a.days==null?15:a.days) - (b.days==null?15:b.days));
     });
     // Section boundaries, recomputed for the new country-first ordering.
@@ -7036,25 +7068,25 @@
     // a tier and would have mislabelled out-of-country email-ready jobs as
     // "no email found", so each group gets its own boundary.
     var inC = function(j){ return geoMatchStrict(j.loc, c2) && !j.usNamesake; };
-    var firstStretchIdx   = view.findIndex(function(j){ return j.isStretch; });
-    var firstLocalNoEmail = view.findIndex(function(j){ return !j.isStretch && inC(j) && !j.email; });
-    var firstOtherIdx     = view.findIndex(function(j){ return !j.isStretch && !inC(j); });
-    var firstOtherNoEmail = view.findIndex(function(j){ return !j.isStretch && !inC(j) && !j.email; });
+    // "No confirmed email" now means no email at all OR only a predicted
+    // guess — the divider marks where confirmed addresses stop.
+    var confirmed = function(j){ return j.email && !j.emailPredicted; };
+    var firstLocalNoEmail = view.findIndex(function(j){ return inC(j) && !confirmed(j); });
+    var firstOtherIdx     = view.findIndex(function(j){ return !inC(j); });
+    var firstOtherNoEmail = view.findIndex(function(j){ return !inC(j) && !confirmed(j); });
     var countryLabel = (c2 && (c2.label || c2.gj)) ? String(c2.label || c2.gj).replace(/^[^\w]+/, '').trim() : 'your country';
     list.innerHTML = view.map(function(j, idx){
       var divider = '';
-      if(idx === firstStretchIdx && firstStretchIdx > 0){
-        divider = '<div class="src-line" style="margin:12px 0 6px; color:#c9a24b;">'+t('otherOpenings')+'</div>';
-      } else if(idx === firstOtherIdx && firstOtherIdx > 0){
+      if(idx === firstOtherIdx && firstOtherIdx > 0){
         divider = '<div class="src-line" style="margin:12px 0 6px; color:#8a93a6;">Beyond '+esc(countryLabel)+' \u2014 same role, elsewhere</div>';
       } else if(idx === firstOtherNoEmail && firstOtherNoEmail > 0 && idx !== firstOtherIdx){
         divider = '<div class="src-line" style="margin:12px 0 6px; color:#8a93a6;">More jobs \u2014 no confirmed application email found yet</div>';
       } else if(idx === firstLocalNoEmail && firstLocalNoEmail > 0){
         divider = '<div class="src-line" style="margin:12px 0 6px; color:#8a93a6;">More in '+esc(countryLabel)+' \u2014 no confirmed application email found yet</div>';
       }
-      var pct;
-      if(j.isStretch){ pct = Math.max(8, Math.min(28, Math.round(15 + j.score*2))); } // stretch jobs: always visibly low
-      else { pct = Math.max(30, Math.min(97, Math.round(30 + (Math.max(j.score,0)/maxScore)*67))); } // absolute-ish scale, no artificial floor for real matches
+      // Every job shown is now on-role, so the old off-field low-percentage
+      // branch is gone along with the jobs it applied to.
+      var pct = Math.max(30, Math.min(97, Math.round(30 + (Math.max(j.score,0)/maxScore)*67))); // absolute-ish scale, no artificial floor for real matches
       var dash = 125.6, off = dash*(1-pct/100);
       var freshTag;
       if(!j.date) freshTag = '<span class="tag">'+t('dateUnknown')+'</span>';
@@ -7062,15 +7094,14 @@
       else if(j.days<=14) freshTag = '<span class="tag">'+t('freshDaysAgo',{days:j.days})+'</span>';
       else freshTag = '<span class="tag warn">'+t('freshWarn',{days:j.days})+'</span>';
       var Lc = I18N[HRX_LANG] || I18N.en;
-      // Per the product rule: only an evidence-backed email is ever
-      // shown as email-apply. A hypothesis is labelled as exactly what
-      // it is — an unconfirmed guess still being researched — and never
-      // borrows the credibility of a real result.
+      // Predicted emails are usable again, so they show as email-apply —
+      // but never disguised as confirmed. Three distinct states, so the
+      // user always knows what they're acting on.
       var emailTag;
-      if(j.email){
+      if(j.email && !j.emailPredicted){
         emailTag = '<span class="tag fresh">&#9993; '+Lc.emailApplyTag+'</span>';
-      } else if(j.predictedEmail){
-        emailTag = '<span class="tag" style="background:#5b3ff0;color:#fff;">&#128302; researching \u2014 no confirmed email yet</span>';
+      } else if(j.email && j.emailPredicted){
+        emailTag = '<span class="tag" style="background:#5b3ff0;color:#fff;">&#128302; '+Lc.predictedEmailTag+'</span>';
       } else {
         emailTag = '<span class="tag src">&#127760; '+Lc.platformApplyTag+'</span>';
       }
@@ -7292,12 +7323,15 @@
     document.getElementById('amCvMatchBtn').textContent = '\ud83d\udcca Check how well my CV matches this job';
     document.getElementById('amCvMatchBtn').disabled = false;
     var gmailReady = !!((cvFile || lsGet('hiraxia_cvFileBase64')) && lsGet('hiraxia_gmailRefreshToken') && lsGet('hiraxia_gmailClientId'));
-    document.getElementById('amToLabel').innerHTML = job.email
+    document.getElementById('amToLabel').innerHTML = (job.email && !job.emailPredicted)
       ? (gmailReady
           ? 'Recruiter email found: <b style="color:#8ef0c0">'+esc(job.email)+'</b>'+(job.emailEvidence?' <span style="opacity:.75">(evidence: '+esc(String(job.emailEvidence).slice(0,120))+')</span>':'')+'. On approval, this sends automatically from your own Gmail, with your CV already attached — no separate send step needed.'
           : 'Recruiter email found: <b style="color:#8ef0c0">'+esc(job.email)+'</b>'+(job.emailEvidence?' <span style="opacity:.75">(evidence: '+esc(String(job.emailEvidence).slice(0,120))+')</span>':'')+'. On approval your email app opens addressed &amp; pre-filled — you attach your CV (\ud83d\udcce) and hit send. Connect Gmail in \u2699 settings to skip that manual step — CVs attach automatically once it\'s linked.')
-      : (job.predictedEmail
-          ? 'No confirmed application email yet. We have an unverified guess (<b style="color:#ffb84d">'+esc(job.predictedEmail)+'</b>) that research could not back up with evidence, so it is deliberately NOT used to send. On approval I\'ll open the apply page and copy your message so you can paste it in.'
+      : (job.email && job.emailPredicted
+          // Usable, but never presented as confirmed: this is a pattern
+          // guess from the company's domain that research could not back
+          // up with evidence. The user decides whether to send it.
+          ? '&#9888;&#65039; <b style="color:#ffb84d">Predicted email, not confirmed:</b> <b style="color:#ffb84d">'+esc(job.email)+'</b>. This is a common-pattern guess based on the company\'s domain — it may bounce or go unread. Review before sending.'
           : 'This job applies on the company/board site — on approval I\'ll open the apply page and copy your message so you can paste it in.');
     document.getElementById('amMsg').value = 'Drafting your message…';
     document.getElementById('amQueue').textContent = applyQueue.length > 1
