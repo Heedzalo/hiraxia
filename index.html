@@ -4174,25 +4174,36 @@
       if(key) seenCompanies[key] = true;
       return true;
     });
-    // Per explicit request: the home country's own jobs (Lebanon, etc.)
-    // shouldn't compete with remote/other-region jobs for the same limited
-    // slots - they get full, uncapped coverage. Other regions fill
-    // whatever slots remain, up to a higher ceiling than before so a
-    // heavy home-country day doesn't starve everything else entirely.
+    // Per explicit request: email enrichment must cover ALL in-country
+    // jobs — no cap. Real bug found: the comment already claimed "full,
+    // uncapped coverage" for home-country jobs, but the code capped them
+    // at 25 anyway (homeCandidates.slice(0, 25)) — the two didn't match.
+    // Home country is now genuinely uncapped; other regions still get a
+    // reasonable ceiling so a heavy home-country day doesn't block them
+    // entirely, but they never take a slot away from an in-country job.
     var cHome = curCountry();
     var homeCandidates = deduped.filter(function(j){ return geoMatchStrict(j.loc, cHome); });
-    var otherCandidates = deduped.filter(function(j){ return !geoMatchStrict(j.loc, cHome); });
-    var candidates = homeCandidates.slice(0, 25).concat(otherCandidates.slice(0, Math.max(0, 30 - Math.min(homeCandidates.length, 25))));
+    var otherCandidates = deduped.filter(function(j){ return !geoMatchStrict(j.loc, cHome); }).slice(0, 30);
+    var candidates = homeCandidates.concat(otherCandidates);
     if(!candidates.length){
       window.__hunterDebug = 'Email search: 0 eligible jobs this search (all had an email, a known ATS, or no usable domain/company name)';
       console.log(window.__hunterDebug);
       return Promise.resolve(jobs);
     }
     var found = 0, prospeoFound = 0, backendFinderUsed = 0, errors = [], backendDomainFound = 0;
-    // STEP 1: domain-discovery + homepage-scan can safely run IN PARALLEL across all
-    // candidates — none of this touches Hunter's own API at all, so there's no
-    // shared rate limit to trip here.
-    return Promise.all(candidates.map(function(j){
+    // Per explicit request: finish home-country candidates FIRST, THEN
+    // start MENA/remote — not run together as one big parallel batch.
+    // runBatch() does the real work (domain-discovery + homepage-scan in
+    // parallel, then Hunter/Prospeo/RapidAPI fallback rate-limited
+    // sequentially) for whichever batch it's given; runPhase chains two
+    // calls to it so the second batch's promises are never even created
+    // until the first batch's chain has fully resolved.
+    function runBatch(batchCandidates){
+      if(!batchCandidates.length) return Promise.resolve();
+      // STEP 1: domain-discovery + homepage-scan can safely run IN PARALLEL across
+      // this batch — none of this touches Hunter's own API at all, so there's no
+      // shared rate limit to trip here.
+      return Promise.all(batchCandidates.map(function(j){
       var urlDomain = guessDomainFromUrl(j.url);
       var domainPromise = urlDomain ? Promise.resolve(urlDomain)
         : findRealDomainViaBackend(j.company, j.loc).then(function(d){ if(d) backendDomainFound++; return d; });
@@ -4283,6 +4294,13 @@
         });
       });
       return chain;
+      });
+    }
+    // Phase 1 (home country) must fully resolve before phase 2
+    // (MENA/remote) even starts — runBatch(otherCandidates) isn't called
+    // until this .then() fires, so there's no overlap between the phases.
+    return runBatch(homeCandidates).then(function(){
+      return runBatch(otherCandidates);
     }).then(function(){
       window.__hunterDebug = 'Email search: tried '+candidates.length+', found '+found+
         (prospeoFound ? ' \u00b7 Prospeo fallback: found '+prospeoFound : '')+
@@ -4832,7 +4850,10 @@
     var base = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
     return fetchWithTimeout(base+'/ai-enrich-jobs-async', {
       method:'POST', headers: backendHeaders({'Content-Type':'application/json'}),
-      body: JSON.stringify({ jobs: candidates, targetCount: candidates.length })
+      // inCountryCount tells the backend exactly where the in-country
+      // slice ends, so it can structurally finish that phase before
+      // starting MENA/remote — not just an ordering coincidence anymore.
+      body: JSON.stringify({ jobs: candidates, targetCount: candidates.length, inCountryCount: inCountry.length })
     }, 45000) // same real fix as the discovery-start call above — real headroom for a cold-start backend, not just the fast-path assumption
       .then(function(r){ return r.ok ? r.json() : {enabled:false}; })
       .then(function(d){
