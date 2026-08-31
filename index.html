@@ -4788,10 +4788,15 @@
                 // printed directly, one line per round, so it's visible
                 // and copyable the same way every other diagnostic line is.
                 if(status.roundLog && status.roundLog.length){
+                  // Per production-diagnostic request: a round that failed
+                  // to search at all (provider timeout/error/403/406) must
+                  // never look identical to a round that genuinely searched
+                  // and found nothing — marked distinctly here (F) instead
+                  // of silently showing the same ':0' as a real empty round.
                   var roundSummary = status.roundLog.map(function(r){
-                    return 'R'+r.round+(r.companyRound?'(company)':'')+':'+r.newCandidates;
+                    return 'R'+r.round+(r.companyRound?'(company)':'')+':'+(r.providerFailure?'F':r.newCandidates);
                   }).join(' | ');
-                  appendDiagLine('Deep discovery rounds: '+roundSummary);
+                  appendDiagLine('Deep discovery rounds: '+roundSummary+(status.roundsWithProviderFailure?' — '+status.roundsWithProviderFailure+' round(s) failed to search (provider error/timeout, not a real empty result)':''));
                 }
                 if(renderJobs.lastOk !== undefined) renderJobs(renderJobs.lastOk, renderJobs.lastSrcNames);
                 return;
