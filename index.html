@@ -3271,16 +3271,31 @@
   }
   function applyLastResortEmailGuess(jobs){
     var guessed = [];
+    var cHome = curCountry();
     // Targeted diagnostic — tracing exactly why a specific HireLebanese
     // "Confidential" job lost its email and fell back to platform-apply,
     // when guessDomainFromCompanyName("Confidential") should still produce
     // a (garbage but present) fallback guess. Tracks the exact rejection
     // reason per HireLebanese job that reaches this function with no email.
-    var hlSkipReasons = { alreadyHadEmail:0, notJobBoardUrl:0, noDomainGuessed:0, guessed:0 };
+    var hlSkipReasons = { alreadyHadEmail:0, realAtsSkipped:0, noDomainGuessed:0, guessed:0 };
     jobs.forEach(function(j){
       var isHl = j.src && j.src.indexOf('HireLebanese')===0;
       if(j.email || !j.url){ if(isHl && j.email) hlSkipReasons.alreadyHadEmail++; return; }
-      if(!JOB_BOARD_DOMAINS.test(j.url)){ if(isHl) hlSkipReasons.notJobBoardUrl++; return; } // only for gated/useless-to-open links — a real company/ATS link stays as a genuine Apply button, which already works fine
+      // Real ask: a job whose Apply link points straight at a company's
+      // own careers page (common for AI-Discovery results — Toters,
+      // Massaya, etc.) was previously assumed to already have "a genuine
+      // Apply button that works fine" and skipped entirely — leaving it
+      // stuck as platform-apply forever, even though Hiraxia's whole
+      // point is finding a real email whenever possible, not settling
+      // for whatever apply mechanism happened to be easiest to link to.
+      // Per explicit instruction: every IN-COUNTRY job with a company
+      // name is triggered, full stop — no ATS exception there anymore.
+      // The genuine-ATS skip (Workday/Greenhouse/Lever/Workable/iCIMS/
+      // Taleo/SuccessFactors — "they want applications through their own
+      // system") is kept ONLY for MENA/remote jobs, to keep that volume
+      // bounded while the original reasoning still applies out-of-country.
+      var isHome = geoMatchStrict(j.loc, cHome);
+      if(!isHome && looksLikeRealATS(j)){ if(isHl) hlSkipReasons.realAtsSkipped++; return; }
       var domain = guessDomainFromCompanyName(j.company);
       if(!domain){ if(isHl) hlSkipReasons.noDomainGuessed++; return; }
       j.email = 'careers@' + domain;
@@ -3290,7 +3305,7 @@
       if(isHl) hlSkipReasons.guessed++;
       guessed.push(j);
     });
-    window.__hlLastResortTrace = 'HireLebanese last-resort trace: alreadyHadEmail='+hlSkipReasons.alreadyHadEmail+', notJobBoardUrl='+hlSkipReasons.notJobBoardUrl+', noDomainGuessed='+hlSkipReasons.noDomainGuessed+', guessed='+hlSkipReasons.guessed;
+    window.__hlLastResortTrace = 'HireLebanese last-resort trace: alreadyHadEmail='+hlSkipReasons.alreadyHadEmail+', realAtsSkipped='+hlSkipReasons.realAtsSkipped+', noDomainGuessed='+hlSkipReasons.noDomainGuessed+', guessed='+hlSkipReasons.guessed;
     console.log(window.__hlLastResortTrace);
     return guessed;
   }
@@ -4164,8 +4179,18 @@
 
   function enrichWithHunterEmail(jobs){
     var GENERIC_COMPANY_NAMES = /^(private company|confidential|client of|undisclosed)/i;
+    var cHome = curCountry();
+    // Per explicit instruction: every in-country job with a real company
+    // name must be triggered for recruitment-email lookup — no ATS
+    // exception for in-country. The ATS skip (Workday/Greenhouse/Lever/
+    // Workable/iCIMS/etc. — "they want applications through their own
+    // system") stays in place for MENA/remote jobs only, where the
+    // original reasoning still applies and volume needs to stay bounded.
     var eligible = jobs.filter(function(j){
-      return !j.email && !looksLikeRealATS(j) && (guessDomainFromUrl(j.url) || (j.company && !GENERIC_COMPANY_NAMES.test(j.company)));
+      if(j.email) return false;
+      if(!(guessDomainFromUrl(j.url) || (j.company && !GENERIC_COMPANY_NAMES.test(j.company)))) return false;
+      var isHome = geoMatchStrict(j.loc, cHome);
+      return isHome || !looksLikeRealATS(j);
     });
     var seenCompanies = {};
     var deduped = eligible.filter(function(j){
@@ -4181,16 +4206,36 @@
     // Home country is now genuinely uncapped; other regions still get a
     // reasonable ceiling so a heavy home-country day doesn't block them
     // entirely, but they never take a slot away from an in-country job.
-    var cHome = curCountry();
     var homeCandidates = deduped.filter(function(j){ return geoMatchStrict(j.loc, cHome); });
     var otherCandidates = deduped.filter(function(j){ return !geoMatchStrict(j.loc, cHome); }).slice(0, 30);
     var candidates = homeCandidates.concat(otherCandidates);
     if(!candidates.length){
-      window.__hunterDebug = 'Email search: 0 eligible jobs this search (all had an email, a known ATS, or no usable domain/company name)';
+      window.__hunterDebug = 'Email search: 0 eligible jobs this search (all had an email or no usable domain/company name)';
       console.log(window.__hunterDebug);
       return Promise.resolve(jobs);
     }
     var found = 0, prospeoFound = 0, backendFinderUsed = 0, errors = [], backendDomainFound = 0;
+    // Real gap found: dedup above only sends ONE representative job per
+    // company through the actual domain/Hunter lookup (a real, deliberate
+    // efficiency choice — no reason to burn 5 domain calls on the same
+    // company). But nothing ever copied a successful result back onto
+    // that company's OTHER jobs still sitting in the full list — they'd
+    // stay platform-apply even though the company's email was already
+    // found right here, in this same run. Every sibling job at the same
+    // company (matched by exact lowercased company name) now gets the
+    // same result applied directly, so "every job with that company
+    // name" genuinely means every one of them, not just the one that
+    // happened to be the dedup representative.
+    function applyToCompanySiblings(companyKey, email, srcSuffix){
+      if(!companyKey || !email) return;
+      jobs.forEach(function(sib){
+        if(sib.email) return;
+        if((sib.company||'').toLowerCase().trim() !== companyKey) return;
+        sib.email = email;
+        sib.src = (sib.src||'') + srcSuffix;
+        try{ emailCacheSet((sib._lastResortDomain||guessDomainFromUrl(sib.url)||''), email, true); }catch(e){}
+      });
+    }
     // Per explicit request: finish home-country candidates FIRST, THEN
     // start MENA/remote — not run together as one big parallel batch.
     // runBatch() does the real work (domain-discovery + homepage-scan in
@@ -4217,6 +4262,7 @@
             j.email = pageEmail; found++;
             j.src = (j.src||'') + ' (email via homepage scan)';
             try{ emailCacheSet(domain, pageEmail, true); }catch(e){} // genuinely found on the real homepage, not a guess
+            applyToCompanySiblings((j.company||'').toLowerCase().trim(), pageEmail, ' (email via homepage scan)');
             return { job: j, domain: null }; // already solved, Hunter not needed
           }
           return { job: j, domain: domain }; // still needs Hunter
@@ -4279,14 +4325,17 @@
               r.job.email = hunterEmail; found++;
               r.job.src = (r.job.src||'') + ' (email via Hunter.io)';
               try{ emailCacheSet(r.domain, hunterEmail); }catch(e){}
+              applyToCompanySiblings((r.job.company||'').toLowerCase().trim(), hunterEmail, ' (email via Hunter.io)');
             } else if(prospeoEmail){
               r.job.email = prospeoEmail; prospeoFound++;
               r.job.src = (r.job.src||'') + ' (email via Prospeo)';
               try{ emailCacheSet(r.domain, prospeoEmail); }catch(e){}
+              applyToCompanySiblings((r.job.company||'').toLowerCase().trim(), prospeoEmail, ' (email via Prospeo)');
             } else if(rapidEmail){
               r.job.email = rapidEmail; backendFinderUsed++;
               r.job.src = (r.job.src||'') + ' (email via RapidAPI finder)';
               try{ emailCacheSet(r.domain, rapidEmail); }catch(e){}
+              applyToCompanySiblings((r.job.company||'').toLowerCase().trim(), rapidEmail, ' (email via RapidAPI finder)');
             } else {
               errors.push(r.domain+': Hunter — '+hunterReason+'; Prospeo — '+prospeoReason+'; RapidAPI finder — '+(rapidReason||'no email either'));
             }
