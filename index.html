@@ -5888,7 +5888,6 @@
   // that flag is off, matching the same safe pattern as every other
   // gated source).
   function sourceTanqeeb(q){
-    console.log('sourceTanqeeb called with query:', q); // real diagnostic: confirms this function is even reached, given it was mysteriously absent from the last test's results entirely
     var base = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
     return fetchWithTimeout(base+'/tanqeeb-jobs', {
       method:'POST', headers: backendHeaders({'Content-Type':'application/json'}),
@@ -5897,11 +5896,42 @@
       .then(function(r){ return r.ok ? r.json() : {jobs:[]}; })
       .then(function(d){
         var mapped = (d.jobs||[]).map(function(j){
-          return { title:j.title||'', company:j.company||'', loc:j.location||'Lebanon', url:j.url||'', date:j.postedDate||'', desc:'', src:'Tanqeeb' };
+          // Real bug found via direct code audit: some listings on
+          // Tanqeeb genuinely carry "Tanqeeb.com" (or another job board's
+          // brand) as their company name. AGGREGATOR_BRAND_WORDS later
+          // CLEARS any such company name as junk — correct behaviour for
+          // a scraped web-search result, wrong here, where Tanqeeb is a
+          // legitimate first-class source. Blanking it at the source
+          // instead means the downstream re-extraction path treats it as
+          // "unknown employer" cleanly, rather than as a bad value to
+          // strip, and no longer risks the job being dropped entirely.
+          var co = String(j.company||'').trim();
+          if(/^(tanqeeb|hirelebanese|bayt|naukri ?gulf|gulf ?talnet|gulftalent|indeed|linkedin|bebee)/i.test(co)) co = '';
+          return { title:j.title||'', company:co, loc:j.location||'Lebanon', url:j.url||'', date:j.postedDate||'',
+                   desc:String(j.snippet||j.description||'').slice(0,600), src:'Tanqeeb' };
+        });
+        // Real ask: Tanqeeb carries a lot of genuinely outdated listings
+        // (confirmed by the user, and visible in its own results — dates
+        // spanning months with no freshness ordering). Filtered at the
+        // source using the SAME daysAgo() helper every other date-aware
+        // part of this app already uses. A job with no parseable date at
+        // all is KEPT (daysAgo returns 999 for those, so they'd otherwise
+        // all be dropped) — being undated isn't proof of being stale, and
+        // dropping every undated job would discard most of the source.
+        var TANQEEB_MAX_AGE_DAYS = 45;
+        mapped = mapped.filter(function(j){
+          if(!j.date) return true; // undated — keep, can't prove it's stale
+          var age = daysAgo(j.date);
+          return age === 999 || age <= TANQEEB_MAX_AGE_DAYS; // 999 means unparseable, not old
         });
         return mapped.filter(function(j){ return relevanceScore(j).rel > 0; });
-      })
-      .catch(function(e){ appendDiagLine('Tanqeeb: request failed — '+String(e.message||e).slice(0,150)); return []; });
+      });
+      // Deliberately NO .catch() here — matching how sourceGreenhouse and
+      // the other working sources behave. A rejected promise is already
+      // handled by the shared Promise.allSettled results handler, which
+      // reports it as a real failure ("Tanqeeb ✗ (reason)"). Catching it
+      // here and returning [] would wrongly report a genuine error as
+      // "Tanqeeb (0)" — ran fine, found nothing — hiding the real cause.
   }
   // Workable: same category as Greenhouse/Lever — public, keyless, per-company job board,
   // confirmed via developer.workable.com. GET apply.workable.com/api/v1/widget/accounts/{slug}
@@ -6429,21 +6459,14 @@
       });
       // Off by default on the backend (ENABLE_TANQEEB_SCRAPER) — this call
       // is safe to always fire, returns empty when the flag is off.
-      // Real bug found via user report: Tanqeeb was completely absent
-      // from the diagnostic — not even "Tanqeeb (0)" — despite every
-      // other source settling correctly (confirmed: since ALL sources
-      // must settle before Promise.allSettled's .then() runs at all, and
-      // every other source DID show up, Tanqeeb's promise genuinely
-      // settled too — it just never made it into `named` to begin with).
-      // Most likely explanation: something inside sourceTanqeeb() threw
-      // SYNCHRONOUSLY when called, before ever returning a promise —
-      // which would skip this push() entirely. Wrapped in a real
-      // try/catch now so that failure becomes visible instead of silent.
-      try {
-        named.push({ n:'Tanqeeb', p:sourceTanqeeb(q) });
-      } catch(e) {
-        appendDiagLine('Tanqeeb: failed to start — '+String(e.message||e).slice(0,150));
-      }
+      // Deliberately written to be STRUCTURALLY IDENTICAL to every other
+      // working source above (a plain named.push with no wrapper) — an
+      // earlier debugging version wrapped this in try/catch with
+      // appendDiagLine() calls, but appendDiagLine is declared ~600 lines
+      // LATER in the file, and relying on hoisting inside a hot path that
+      // every other source avoids was an unnecessary risk. If Tanqeeb
+      // returns nothing, it shows as "Tanqeeb (0)" like any other source.
+      named.push({ n:'Tanqeeb', p:sourceTanqeeb(q) });
       (lsGet('hiraxia_leverTokens')||'').split(',').map(function(t){ return t.trim(); }).filter(Boolean).slice(0,10).forEach(function(tok){
         named.push({ n:'Lever\u00b7'+tok, p:sourceLever(tok, q) });
       });
