@@ -5910,19 +5910,37 @@
           return { title:j.title||'', company:co, loc:j.location||'Lebanon', url:j.url||'', date:j.postedDate||'',
                    desc:String(j.snippet||j.description||'').slice(0,600), src:'Tanqeeb' };
         });
-        // Real ask: Tanqeeb carries a lot of genuinely outdated listings
-        // (confirmed by the user, and visible in its own results — dates
-        // spanning months with no freshness ordering). Filtered at the
-        // source using the SAME daysAgo() helper every other date-aware
-        // part of this app already uses. A job with no parseable date at
-        // all is KEPT (daysAgo returns 999 for those, so they'd otherwise
-        // all be dropped) — being undated isn't proof of being stale, and
-        // dropping every undated job would discard most of the source.
+        // Real ask: Tanqeeb carries a lot of genuinely outdated listings.
+        // Real bug found via user report: the first version of this filter
+        // used only daysAgo(), which relies on new Date() — but Tanqeeb
+        // shows RELATIVE dates ("2 months ago", "3 weeks ago"), which
+        // new Date() cannot parse at all. Every one of them returned 999
+        // ("unparseable"), which this filter deliberately KEEPS, so
+        // literally every relative-dated job passed through regardless of
+        // age — including the 2-month-old ones the user saw. Now parses
+        // the relative format directly before falling back to daysAgo().
         var TANQEEB_MAX_AGE_DAYS = 45;
+        function tanqeebAgeInDays(dateStr){
+          var s = String(dateStr||'').trim().toLowerCase();
+          if(!s) return null; // genuinely no date given — can't judge
+          var m = s.match(/^(?:about\s+)?(a|an|\d+)\s*(day|week|month|year|hour|minute)s?\s*ago$/);
+          if(m){
+            var n = (m[1]==='a'||m[1]==='an') ? 1 : parseInt(m[1],10);
+            var unit = m[2];
+            if(unit==='hour'||unit==='minute') return 0;
+            if(unit==='day') return n;
+            if(unit==='week') return n*7;
+            if(unit==='month') return n*30;
+            if(unit==='year') return n*365;
+          }
+          if(/^(today|yesterday|just now)$/.test(s)) return s==='yesterday' ? 1 : 0;
+          var d = daysAgo(dateStr);
+          return d === 999 ? null : d; // null = genuinely unknown, not "old"
+        }
         mapped = mapped.filter(function(j){
-          if(!j.date) return true; // undated — keep, can't prove it's stale
-          var age = daysAgo(j.date);
-          return age === 999 || age <= TANQEEB_MAX_AGE_DAYS; // 999 means unparseable, not old
+          var age = tanqeebAgeInDays(j.date);
+          if(age === null) return true; // genuinely unknown age — keep, can't prove it's stale
+          return age <= TANQEEB_MAX_AGE_DAYS;
         });
         return mapped.filter(function(j){ return relevanceScore(j).rel > 0; });
       });
