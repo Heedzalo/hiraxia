@@ -2894,7 +2894,7 @@
     'qatarliving.com','monster.com','ziprecruiter.com','careerjet.com','reliefweb.int','greenhouse.io','lever.co',
     'workable.com','myworkdayjobs.com','remotive.com','arbeitnow.com','jobicy.co','themuse.com','remoteok.com',
     'remoteok.io','adzuna.com','bebee.com','tanqeeb.com','qureos.com','laimoon.com','hiregulf.com','forasna.com',
-    'jobstreet.com','talent.com','receptix.com','jadarat.sa','jobleads.de','jobleads.com','jobsforlebanon.com','opensooq.com','workday.com','testhiring.com',
+    'jobstreet.com','talent.com','receptix.com','jadarat.sa','jobleads.de','jobleads.com','jobsforlebanon.com','jobsforhumanity.com','jobsforhumanity.org','smartrecruiters.com','jobsforhumanity.io','opensooq.com','workday.com','testhiring.com',
     // Real bug found via user report: this list had drifted out of sync
     // with the backend's own list - these were all added to the backend
     // during earlier fixes today but never mirrored here, so guessDomainFromUrl
@@ -3406,6 +3406,15 @@
   // real instead of a wall, even for jobs the paid pipeline never reached.
   function guessDomainFromCompanyName(company){
     if(!company) return null;
+    // Real bug found via user report: a "Treasurer" job whose REAL employer
+    // is Sayed Farms (Agribond Group) was shown as "Jobs for Humanity" with
+    // contact@jobsforhumanity.com — Jobs for Humanity is a syndicator that
+    // reposts other companies' listings, not the employer. The generic-name
+    // guard already recognised the label, but nothing stopped a DOMAIN being
+    // derived from it, so jobsforhumanity.com got scanned and its own
+    // contact address came back as a "confirmed" recruiter email.
+    // A label that is not a real employer must not yield an employer domain.
+    if(isGenericCompanyName(company)) return null;
     var clean = String(company).toLowerCase()
       .replace(/\([^)]*\)/g, ' ') // strip parenthetical notes, e.g. "BD (Becton, Dickinson and Co.)"
       .replace(/[^a-z0-9\s&-]/g, '')
@@ -3697,6 +3706,36 @@
     matching = orderForEmailDiscovery(matching).slice(0, 40);
     return runWithConcurrency(matching, 3, function(j){
       return relayFetchText(j.url).then(function(html){
+        // Real employer recovery from the fetched page, per a live case: a
+        // Treasurer job at SAYED FARMS was attributed to "Jobs for
+        // Humanity", the syndicator whose SmartRecruiters page hosted it.
+        // That page states "Company: Sayed Farms" in plain text. When the
+        // current company label is a generic/aggregator one, the page's own
+        // stated employer is far more trustworthy — recovering it here also
+        // unlocks the correct domain for every later enrichment stage.
+        try{
+          var curCo = String(j.company||'').trim();
+          if(!curCo || isGenericCompanyName(curCo)){
+            var plain = String(html).replace(/<[^>]+>/g,' ').replace(/&amp;/g,'&').replace(/\s+/g,' ');
+            // Stops at the first strong boundary. An earlier version used a
+            // non-lookahead group and swallowed the page's button text
+            // ("Sayed Farms I am interested"), so the boundary is asserted
+            // rather than consumed.
+            var cm = plain.match(/\bCompany\s*[:\u2013-]\s*(.{2,60}?)(?=\s+(?:I['\u2019]?m interested|I am interested|Company Description|Job Description|Qualifications|Additional Information|Apply|Full-time|Part-time|Contract)\b|\s{2,}|$)/i);
+            if(cm){
+              var recovered = cm[1].replace(/[\s.,-]+$/,'').trim();
+              if(recovered.length > 1 && !isGenericCompanyName(recovered)){
+                j._originalCompany = curCo || null;
+                j.company = recovered;
+                j._employerRecovered = true;
+                j.src = (j.src||'') + ' (employer recovered from job page)';
+                // The old label's guessed email is now known to be the
+                // wrong company's — drop it so enrichment starts clean.
+                if(j.emailPredicted){ j.email = null; j.predictedEmail = null; j.emailHypotheses = []; delete j._lastResortDomain; }
+              }
+            }
+          }
+        }catch(e){}
         var found = extractEmailFromText(html, true); // strict — only a real, explicit apply instruction counts
         if(found){
           j.email = found;
@@ -3928,7 +3967,15 @@
     // this pass could actually afford — a large gap is the real signal
     // that the cap, not the eligibility rules, is the limiting factor.
     // (The async predicted->real upgrade pass picks up the remainder.)
-    var withCompany = jobs.filter(function(j){ return !j.email && (j.emailHypotheses && j.emailHypotheses.length); }).length;
+    // Real regression: this counted jobs with `!j.email`, which was correct
+    // only while predicted emails deliberately left j.email null. Since
+    // predicted emails became usable (and so populate j.email), every
+    // hypothesis-bearing job failed the test and this always reported 0 —
+    // making it look like nothing was researchable when the opposite was
+    // true. Counts hypothesis-bearing jobs regardless of a predicted value.
+    var withCompany = jobs.filter(function(j){
+      return (!j.email || j.emailPredicted) && j.emailHypotheses && j.emailHypotheses.length;
+    }).length;
     window.__researchCoverage = 'Email research coverage: '+jobs.length+' jobs \u2014 '+withCompany+' with a researchable company/domain, '
       + passedThreshold.length+' passed the priority threshold, '
       + coreTargets.length+' in-country on-role ('+coreSlice.length+' researched, guarantee '+CORE_GUARANTEE+'), '
@@ -4004,6 +4051,27 @@
           // which survives this and every other renderJobs() call.
           var byUrl = {};
           d.results.forEach(function(r){ if(r.email && r.jobUrl) byUrl[r.jobUrl] = r; });
+          // Attach the per-job explanation for jobs research could NOT find
+          // an email for. Without this a job that stayed predicted looked
+          // identical whether a validator rejected a wrong-company address
+          // or nothing was published at all — no way to tell which.
+          var whyByUrl = {};
+          d.results.forEach(function(r){ if(!r.email && r.jobUrl && r.whyNoEmail) whyByUrl[r.jobUrl] = r.whyNoEmail; });
+          jobs.forEach(function(j){ if(j.url && whyByUrl[j.url]) j.whyNoEmail = whyByUrl[j.url]; });
+          // Aggregate view of the same data — one line showing which
+          // reasons dominated, so a systemic problem (e.g. every address
+          // rejected as wrong-company because the guessed domain is bad)
+          // is visible without opening jobs one by one.
+          var whyCounts = {};
+          Object.keys(whyByUrl).forEach(function(u){
+            var key = String(whyByUrl[u]).split(' but ')[0].split(':')[0].slice(0, 60);
+            whyCounts[key] = (whyCounts[key] || 0) + 1;
+          });
+          var whyKeys = Object.keys(whyCounts);
+          if(whyKeys.length){
+            whyKeys.sort(function(a,b){ return whyCounts[b] - whyCounts[a]; });
+            appendDiagLine('No email found \u2014 reasons: ' + whyKeys.slice(0, 4).map(function(k){ return whyCounts[k]+'\u00d7 '+k; }).join(' \u00b7 '));
+          }
           jobs.forEach(function(j){
             var match = j.url && byUrl[j.url];
             if(!match) return;
@@ -5814,6 +5882,26 @@
         return mapped.filter(function(j){ return relevanceScore(j).rel > 0; });
       });
   }
+  // Real ask: wire Tanqeeb into the live search flow via the new
+  // /tanqeeb-jobs backend route (off by default there via
+  // ENABLE_TANQEEB_SCRAPER — this call is harmless/returns empty when
+  // that flag is off, matching the same safe pattern as every other
+  // gated source).
+  function sourceTanqeeb(q){
+    var base = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
+    return fetchWithTimeout(base+'/tanqeeb-jobs', {
+      method:'POST', headers: backendHeaders({'Content-Type':'application/json'}),
+      body: JSON.stringify({ query: q||'' })
+    }, 30000) // AI-extraction based, needs real headroom for the fetch+AI round trip
+      .then(function(r){ return r.ok ? r.json() : {jobs:[]}; })
+      .then(function(d){
+        var mapped = (d.jobs||[]).map(function(j){
+          return { title:j.title||'', company:j.company||'', loc:j.location||'Lebanon', url:j.url||'', date:j.postedDate||'', desc:'', src:'Tanqeeb' };
+        });
+        return mapped.filter(function(j){ return relevanceScore(j).rel > 0; });
+      })
+      .catch(function(e){ appendDiagLine('Tanqeeb: request failed — '+String(e.message||e).slice(0,150)); return []; });
+  }
   // Workable: same category as Greenhouse/Lever — public, keyless, per-company job board,
   // confirmed via developer.workable.com. GET apply.workable.com/api/v1/widget/accounts/{slug}
   // Workable's OWN cross-company meta-search (jobs.workable.com) — different from the
@@ -6338,6 +6426,9 @@
       (lsGet('hiraxia_greenhouseTokens') || 'careem,tamara').split(',').map(function(t){ return t.trim(); }).filter(Boolean).slice(0,15).forEach(function(tok){
         named.push({ n:'Greenhouse\u00b7'+tok, p:sourceGreenhouse(tok, q) });
       });
+      // Off by default on the backend (ENABLE_TANQEEB_SCRAPER) — this call
+      // is safe to always fire, returns empty when the flag is off.
+      named.push({ n:'Tanqeeb', p:sourceTanqeeb(q) });
       (lsGet('hiraxia_leverTokens')||'').split(',').map(function(t){ return t.trim(); }).filter(Boolean).slice(0,10).forEach(function(tok){
         named.push({ n:'Lever\u00b7'+tok, p:sourceLever(tok, q) });
       });
@@ -6604,15 +6695,27 @@
             var srcName = String(j.src||'other').split(' ')[0].split('\u00b7')[0] || 'other';
             (scanGroups[srcName] = scanGroups[srcName] || []).push(j);
           });
+          // Speed: title classification is an AI round-trip that produces
+          // NO emails — it only decides which jobs count as on-role, which
+          // matters solely for prioritising AI research further down. The
+          // page scans don't depend on it at all, so keeping it in the
+          // sequential chain meant its full latency sat on the critical
+          // path for nothing. It now runs CONCURRENTLY with the page
+          // scans, and both are awaited before AI research — so the
+          // ordering guarantee it exists for (promoted jobs get
+          // prioritised correctly) is fully preserved, just without the
+          // wait.
+          // .catch here matters now that it's started early and awaited
+          // later: an unhandled rejection from a promise created ahead of
+          // its await would surface as an uncaught error, and a failed
+          // classification must never take the email pipeline down with it.
+          var classifyPromise = classifyUnknownTitles(allJobs).catch(function(){});
           Promise.all(Object.keys(scanGroups).map(function(srcName){
             return backgroundPageScanBySource(scanGroups[srcName], srcName);
           })).then(function(){
-            // Real ask: AI title classification runs FIRST in this chain,
-            // before email enrichment — jobs it promotes from "different
-            // field" to relevant should then correctly benefit from the
-            // existing relevant-first prioritization in AI research below,
-            // not be treated as already-decided by the time enrichment runs.
-            classifyUnknownTitles(allJobs).then(function(){
+            return classifyPromise; // guarantee kept: classification is complete before anything below runs
+          }).then(function(){
+            Promise.resolve().then(function(){
               // Second layer specifically for WebSearch, per explicit quality
               // target: only fires for whatever still has no email after the
               // job's-own-page scan above — tries the company's real domain +
@@ -7384,6 +7487,9 @@
           // guess from the company's domain that research could not back
           // up with evidence. The user decides whether to send it.
           ? '&#9888;&#65039; <b style="color:#ffb84d">Predicted email, not confirmed:</b> <b style="color:#ffb84d">'+esc(job.email)+'</b>. This is a common-pattern guess based on the company\'s domain — it may bounce or go unread. Review before sending.'
+            // Says WHY research couldn't confirm a real address for this
+            // specific employer, instead of leaving it unexplained.
+            + (job.whyNoEmail ? '<br><span style="opacity:.7;font-size:12px;">Research outcome: '+esc(String(job.whyNoEmail).slice(0,160))+'</span>' : '')
           : 'This job applies on the company/board site — on approval I\'ll open the apply page and copy your message so you can paste it in.');
     document.getElementById('amMsg').value = 'Drafting your message…';
     document.getElementById('amQueue').textContent = applyQueue.length > 1
