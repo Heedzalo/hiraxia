@@ -5888,6 +5888,7 @@
   // that flag is off, matching the same safe pattern as every other
   // gated source).
   function sourceTanqeeb(q){
+    console.log('sourceTanqeeb called with query:', q); // real diagnostic: confirms this function is even reached, given it was mysteriously absent from the last test's results entirely
     var base = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
     return fetchWithTimeout(base+'/tanqeeb-jobs', {
       method:'POST', headers: backendHeaders({'Content-Type':'application/json'}),
@@ -6428,7 +6429,21 @@
       });
       // Off by default on the backend (ENABLE_TANQEEB_SCRAPER) — this call
       // is safe to always fire, returns empty when the flag is off.
-      named.push({ n:'Tanqeeb', p:sourceTanqeeb(q) });
+      // Real bug found via user report: Tanqeeb was completely absent
+      // from the diagnostic — not even "Tanqeeb (0)" — despite every
+      // other source settling correctly (confirmed: since ALL sources
+      // must settle before Promise.allSettled's .then() runs at all, and
+      // every other source DID show up, Tanqeeb's promise genuinely
+      // settled too — it just never made it into `named` to begin with).
+      // Most likely explanation: something inside sourceTanqeeb() threw
+      // SYNCHRONOUSLY when called, before ever returning a promise —
+      // which would skip this push() entirely. Wrapped in a real
+      // try/catch now so that failure becomes visible instead of silent.
+      try {
+        named.push({ n:'Tanqeeb', p:sourceTanqeeb(q) });
+      } catch(e) {
+        appendDiagLine('Tanqeeb: failed to start — '+String(e.message||e).slice(0,150));
+      }
       (lsGet('hiraxia_leverTokens')||'').split(',').map(function(t){ return t.trim(); }).filter(Boolean).slice(0,10).forEach(function(tok){
         named.push({ n:'Lever\u00b7'+tok, p:sourceLever(tok, q) });
       });
