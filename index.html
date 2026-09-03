@@ -4377,67 +4377,24 @@
 
       return step1.then(function(done){
         if(done) return;
-        // STEP 2 — company's real site via domain discovery (Tavily \u2192 Brave \u2192 DDG),
-        // driven by the page-embedded name when we have one — it's the truer name.
-        // This IS the company's own verified domain, so the fallback (not just
-        // explicit apply-language) is trustworthy here — strict=false.
-        // Real bug found via user report: this used to skip straight to "no
-        // email" whenever the job happened to be hosted on a non-aggregator
-        // domain (directOk), reusing the SAME application page already fetched
-        // in step 1 instead of ever searching for the company's real site.
-        // An application/careers page is not the company's general site and
-        // usually has no contact email on it at all — its only real job is
-        // supplying the company NAME, which step 1 already did. Every job now
-        // always gets a proper name-based domain search, no exceptions.
-        var lookupName = embeddedName || j.company;
-        // If the source already handed us a verified domain (RemoteJobs.org),
-        // skip the fragile name-based search entirely and use it directly.
-        var domainPromise = j.knownDomain
-          ? Promise.resolve({ domain: j.knownDomain, fetchUrl: 'https://'+j.knownDomain })
-          : findRealDomainViaBackend(lookupName, j.loc).then(function(d){
-              return d ? { domain: d, fetchUrl: 'https://'+d } : null;
-            });
-        return domainPromise.then(function(info){
-          if(!info || !info.fetchUrl){
-            errors.push((j.company||j.url||'?')+': no domain found via company-name search');
-            return;
-          }
-          // Check the SHARED cache first — a real fetch + Gamalogic verification
-          // round is the most expensive part of this whole chain, and if any
-          // other user already confirmed this exact domain's email, there's
-          // no reason to pay that cost again.
-          return emailCacheGetShared(info.domain).then(function(shared){
-            if(shared.found){
-              // Per product rule: SHARED_CACHE counts as evidence-backed
-              // ONLY if what was cached was itself verified. An unverified
-              // cached value is someone else's unproven hypothesis — it
-              // stays a hypothesis here too rather than being promoted
-              // into j.email and shown as email-apply.
-              if(shared.verified){
-                j.email = shared.email; j.emailPredicted = false; j.emailVerified = true;
-                j.emailConfidence = 'SHARED_CACHE'; j.emailReady = true;
-                j.emailEvidence = 'previously verified for ' + (info.domain||'this domain') + ' and reused from the shared company cache';
-                j.src = (j.src||'') + ' (email via shared cache)';
-                errors.push((info.domain||'?')+': found in shared cache, no new search needed');
-                return;
-              }
-              j.predictedEmail = j.predictedEmail || shared.email;
-              j.emailPredicted = true; j.emailConfidence = 'PREDICTED'; j.emailReady = false;
-              errors.push((info.domain||'?')+': shared cache had only an UNVERIFIED value — kept as hypothesis, not promoted');
-              return;
-            }
-            return relayFetchText(info.fetchUrl)
-              .then(function(html){
-                if(!scanText(html, 'page scan', info.domain)){
-                  verifyPredictedEmail(j, info.domain).then(function(res){
-                    j.src = (j.src||'') + ' (' + (res.verified ? 'verified via pattern check' : 'predicted - not confirmed') + ')';
-                    errors.push((info.domain||'?')+': '+res.note);
-                  });
-                }
-              })
-              .catch(function(e){ errors.push((info.domain||'?')+': '+String(e.message||e).slice(0,60)); });
-          });
-        });
+        // STEP 2 (domain-based homepage scan) removed on purpose — it used
+        // to run its own separate, weaker domain search + single raw
+        // homepage fetch (client-side regex, no careers/contact/about
+        // crawl, no domain-relevance check) IN PARALLEL with
+        // enrichWithHunterEmail's real chain (backend /scan-website-email
+        // with the full page crawl + domain-relevance fix, then Prospeo,
+        // then the RapidAPI email-finder). Real bug found via user report:
+        // since both started at once on the same job, a job could get a
+        // genuine, evidence-backed email from the good chain while this
+        // weaker one's own failed guess-verification attempt stamped the
+        // SAME job "(predicted - not confirmed)" right alongside it —
+        // contradictory labels on a job that actually had a real email.
+        // Domain-based searching now has exactly ONE owner
+        // (enrichWithHunterEmail); this function only ever reads the job's
+        // own posting page (Step 1 above) for an explicit apply-email
+        // instruction, which is real, distinct value the other chain
+        // doesn't cover.
+        return;
       });
     }
 
@@ -4932,7 +4889,7 @@
       console.log(window.__hunterDebug);
       return Promise.resolve(jobs);
     }
-    var found = 0, prospeoFound = 0, backendFinderUsed = 0, errors = [], backendDomainFound = 0, handedToAi = 0;
+    var found = 0, prospeoFound = 0, backendFinderUsed = 0, backendFinderGuessed = 0, errors = [], backendDomainFound = 0, handedToAi = 0;
     // Real gap found: dedup above only sends ONE representative job per
     // company through the actual domain/Hunter lookup (a real, deliberate
     // efficiency choice — no reason to burn 5 domain calls on the same
@@ -5035,7 +4992,16 @@
             }).then(function(resp){ clearTimeout(timeoutId); return resp.ok ? resp.json() : {email:''}; })
               .then(function(d){
                 if(!d || !d.email) rapidReason = 'no email either';
-                return (d && d.email) || null;
+                // Real bug found via user report: the backend already tells
+                // us whether this address was a REAL candidate from the API
+                // or a constructed careers@/hr@ last-resort guess (d.predicted)
+                // — this used to throw that flag away and return just the
+                // email string, so a guessed address for a company we have a
+                // clear name for (e.g. Murex) got treated exactly like a
+                // confirmed find. That silently locked it out of the
+                // Predicted\u2192real AI upgrade pass too, since that pass only
+                // ever looks at jobs with emailPredicted===true.
+                return (d && d.email) ? { email: d.email, predicted: !!d.predicted } : null;
               }).catch(function(e){
                 clearTimeout(timeoutId);
                 rapidReason = (e && e.name === 'AbortError') ? 'timed out after 20s' : String(e.message||e).slice(0,50);
@@ -5044,7 +5010,7 @@
           })();
 
           return Promise.all([hunterPromise, prospeoPromise, rapidPromise]).then(function(results3){
-            var hunterEmail = results3[0], prospeoEmail = results3[1], rapidEmail = results3[2];
+            var hunterEmail = results3[0], prospeoEmail = results3[1], rapidResult = results3[2];
             if(hunterEmail){
               r.job.email = hunterEmail; found++;
               r.job.src = (r.job.src||'') + ' (email via Hunter.io)';
@@ -5055,11 +5021,31 @@
               r.job.src = (r.job.src||'') + ' (email via Prospeo)';
               try{ emailCacheSet(r.domain, prospeoEmail); }catch(e){}
               applyToCompanySiblings((r.job.company||'').toLowerCase().trim(), prospeoEmail, ' (email via Prospeo)');
-            } else if(rapidEmail){
-              r.job.email = rapidEmail; backendFinderUsed++;
+            } else if(rapidResult && !rapidResult.predicted){
+              r.job.email = rapidResult.email; backendFinderUsed++;
               r.job.src = (r.job.src||'') + ' (email via RapidAPI finder)';
-              try{ emailCacheSet(r.domain, rapidEmail); }catch(e){}
-              applyToCompanySiblings((r.job.company||'').toLowerCase().trim(), rapidEmail, ' (email via RapidAPI finder)');
+              try{ emailCacheSet(r.domain, rapidResult.email); }catch(e){}
+              applyToCompanySiblings((r.job.company||'').toLowerCase().trim(), rapidResult.email, ' (email via RapidAPI finder)');
+            } else if(rapidResult && rapidResult.predicted){
+              // A constructed careers@/hr@ guess, not a confirmed find. Kept
+              // usable (email-apply still shows) but honestly labeled, and —
+              // the actual fix — now flagged emailPredicted so it's eligible
+              // for the Predicted\u2192real AI upgrade pass below, same as any
+              // other guessed email, instead of being mistaken for a
+              // confirmed result and never revisited.
+              r.job.email = rapidResult.email; backendFinderGuessed++;
+              r.job.predictedEmail = rapidResult.email;
+              r.job.emailPredicted = true;
+              r.job.emailConfidence = 'PREDICTED';
+              r.job.emailReady = false;
+              r.job.src = (r.job.src||'') + ' (predicted from RapidAPI finder — not confirmed)';
+              // r.domain came from a real domain-name search (findRealDomainViaBackend,
+              // verified against the company name), not a company-name guess —
+              // genuine evidence the AI's ownership check can safely trust.
+              r.job._lastResortDomain = r.domain;
+              r.job._domainVerified = true;
+              r.job.emailHypotheses = r.job.emailHypotheses && r.job.emailHypotheses.length ? r.job.emailHypotheses : [rapidResult.email];
+              applyToCompanySiblings((r.job.company||'').toLowerCase().trim(), rapidResult.email, ' (predicted from RapidAPI finder — not confirmed)');
             } else {
               // Paid-API path found nothing. This is NOT a dead end — the
               // job keeps j.email null and stays fully eligible for AI
@@ -5086,6 +5072,7 @@
       window.__hunterDebug = 'Email search: tried '+candidates.length+', found '+found+
         (prospeoFound ? ' \u00b7 Prospeo fallback: found '+prospeoFound : '')+
         (backendFinderUsed ? ' \u00b7 RapidAPI finder fallback: found '+backendFinderUsed : '')+
+        (backendFinderGuessed ? ' \u00b7 RapidAPI finder fallback: guessed '+backendFinderGuessed+' (no real candidate — now queued for AI upgrade)' : '')+
         (backendDomainFound ? ' ('+backendDomainFound+' via backend domain-finder)' : '')+
         (handedToAi ? ' \u00b7 '+handedToAi+' handed to AI research (paid APIs found nothing \u2014 Hunter is disabled, so this is the normal path)' : '')+
         (errors.length ? ' — '+errors.join(' \u00b7 ') : '');
