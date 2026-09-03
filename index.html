@@ -5031,7 +5031,7 @@
             var timeoutId = setTimeout(function(){ ctrl.abort(); }, 20000);
             return fetch(base+'/email-finder', {
               method:'POST', headers: backendHeaders({'Content-Type':'application/json'}),
-              body: JSON.stringify({ domain: r.domain }), signal: ctrl.signal
+              body: JSON.stringify({ domain: r.domain, locationHint: (r.job && r.job.loc) || '' }), signal: ctrl.signal // locationHint lets the backend's scorer prefer a branch address matching THIS job's city, same as it already does elsewhere
             }).then(function(resp){ clearTimeout(timeoutId); return resp.ok ? resp.json() : {email:''}; })
               .then(function(d){
                 if(!d || !d.email) rapidReason = 'no email either';
