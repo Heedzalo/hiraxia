@@ -4892,6 +4892,24 @@
       .catch(function(){ return null; });
   }
 
+  // Ask the backend whether this employer is already in the verified
+  // registry, and if so read the email straight off its known careers page.
+  // Real gap found via user report: Macromed showed a GUESSED email even
+  // though the registry held its verified careers page — the registry was
+  // only consulted for jobs that came FROM EmployerSites, so 261 known-good
+  // careers pages went unused for jobs arriving via HireLebanese, Tanqeeb
+  // and everything else. This runs before any guessing.
+  function lookupEmployerRegistryEmail(company){
+    if(!company) return Promise.resolve(null);
+    var base = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
+    return fetchWithTimeout(base+'/employer-email?company='+encodeURIComponent(company), {
+      headers: backendHeaders({})
+    }, 15000)
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(d){ return (d && d.email) ? d : null; })
+      .catch(function(){ return null; });
+  }
+
   function enrichWithHunterEmail(jobs){
     var GENERIC_COMPANY_NAMES = /^(private company|confidential|client of|undisclosed)/i;
     var cHome = curCountry();
@@ -4932,7 +4950,7 @@
       console.log(window.__hunterDebug);
       return Promise.resolve(jobs);
     }
-    var found = 0, prospeoFound = 0, backendFinderUsed = 0, errors = [], backendDomainFound = 0, handedToAi = 0;
+    var found = 0, prospeoFound = 0, backendFinderUsed = 0, errors = [], backendDomainFound = 0, handedToAi = 0, registryFound = 0;
     // Real gap found: dedup above only sends ONE representative job per
     // company through the actual domain/Hunter lookup (a real, deliberate
     // efficiency choice — no reason to burn 5 domain calls on the same
@@ -4973,6 +4991,27 @@
       // this batch — none of this touches Hunter's own API at all, so there's no
       // shared rate limit to trip here.
       return Promise.all(batchCandidates.map(function(j){
+      // STEP 0 — the verified employer registry. If this employer already has
+      // a known-good careers page on file, read the email from there before
+      // spending anything on domain discovery or guessing. This is the
+      // highest-confidence source available: a real page, already verified.
+      return lookupEmployerRegistryEmail(j.company).then(function(reg){
+        if(reg && reg.email){
+          j.email = reg.email;
+          j.emailPredicted = false;
+          j.emailVerified = true;
+          j.emailConfidence = 'REGISTRY';
+          j.emailReady = true;
+          j.emailQuality = reg.quality;
+          j.emailEvidence = reg.evidence || ('published on ' + reg.careersUrl);
+          registryFound++;
+          j.src = (j.src||'') + ' (email via employer careers page)';
+          applyToCompanySiblings((j.company||'').toLowerCase().trim(), reg.email, ' (email via employer careers page)');
+          return { job: j, domain: null };
+        }
+        return null;
+      }).then(function(solved){
+      if(solved) return solved;
       var urlDomain = guessDomainFromUrl(j.url);
       var domainPromise = urlDomain ? Promise.resolve(urlDomain)
         : findRealDomainViaBackend(j.company, j.loc).then(function(d){ if(d) backendDomainFound++; return d; });
@@ -4992,6 +5031,7 @@
           return { job: j, domain: domain }; // still needs Hunter
         });
       });
+      }); // closes the registry-lookup .then wrapper added above
     })).then(function(results){
       // STEP 2: whatever STILL needs Hunter gets processed ONE AT A TIME, not all
       // at once — confirmed real tonight: firing several Hunter domain-search
@@ -5084,6 +5124,7 @@
       return runBatch(otherCandidates);
     }).then(function(){
       window.__hunterDebug = 'Email search: tried '+candidates.length+', found '+found+
+        (registryFound ? ' \u00b7 employer registry (verified careers pages): '+registryFound : '')+
         (prospeoFound ? ' \u00b7 Prospeo fallback: found '+prospeoFound : '')+
         (backendFinderUsed ? ' \u00b7 RapidAPI finder fallback: found '+backendFinderUsed : '')+
         (backendDomainFound ? ' ('+backendDomainFound+' via backend domain-finder)' : '')+
