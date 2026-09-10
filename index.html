@@ -5911,14 +5911,26 @@
         return (d.jobs||[]).map(function(j){
           var host = '';
           try { host = new URL(j.url).hostname.replace(/^www\./,''); } catch(e){}
+          // Real bug found in production: knownDomain was set from the JOB
+          // URL's host. For ATS-hosted employers that is the ATS itself
+          // (quick-jobs.careers-page.com), so the email chain scanned an ATS
+          // board for a recruiter address, found none, and fell back to
+          // guessing from the company name — every EmployerSite job came out
+          // as "predicted email". An ATS host is never the employer's domain.
+          var ATS_HOSTS = /(careers-page\.com|smartrecruiters\.com|greenhouse\.io|lever\.co|workable\.com|recruitee\.com|zohorecruit\.com|bamboohr\.com|pinpointhq\.com|applytojob\.com|myworkdayjobs\.com|taleo\.net|successfactors\.com)$/i;
+          var realDomain = j.employerDomain && !ATS_HOSTS.test(j.employerDomain) ? j.employerDomain
+                         : (host && !ATS_HOSTS.test(host) ? host : '');
           return {
             title: j.title||'', company: j.company||'', loc: j.location||'Lebanon',
             url: j.url||'', date: '', desc: String(j.snippet||'').slice(0,600),
             src: 'EmployerSite',
-            // The employer's own domain is known for certain here, so the
-            // email chain can skip domain discovery entirely rather than
-            // guessing one from the company name.
-            knownDomain: host || undefined
+            // The recruiter email read straight off the employer's careers
+            // page, when there was one. This is the whole point of the
+            // source: a real, published address rather than a guess.
+            email: j.email || undefined,
+            emailQuality: j.emailQuality || undefined,
+            emailEvidence: j.email ? ('published on ' + (j.emailSource || 'the employer careers page')) : undefined,
+            knownDomain: realDomain || undefined
           };
         });
       })
