@@ -4899,15 +4899,39 @@
   // only consulted for jobs that came FROM EmployerSites, so 261 known-good
   // careers pages went unused for jobs arriving via HireLebanese, Tanqeeb
   // and everything else. This runs before any guessing.
+  // Module-level so counts survive across the whole enrichment pass and can
+  // be reported in one line at the end.
+  var registryLookupErrors = {}, registryLookupMisses = {};
   function lookupEmployerRegistryEmail(company){
     if(!company) return Promise.resolve(null);
     var base = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
     return fetchWithTimeout(base+'/employer-email?company='+encodeURIComponent(company), {
       headers: backendHeaders({})
     }, 15000)
-      .then(function(r){ return r.ok ? r.json() : null; })
-      .then(function(d){ return (d && d.email) ? d : null; })
-      .catch(function(){ return null; });
+      .then(function(r){
+        // Real diagnostic gap of my own making: this used to swallow every
+        // failure and return null, so a 404 (backend not yet on v143), an
+        // auth failure, or a cold-start timeout all looked identical to
+        // "this employer simply isn't in the registry" — leaving no way to
+        // tell a deploy problem from a genuine miss.
+        if(!r.ok){
+          registryLookupErrors[('HTTP '+r.status)] = (registryLookupErrors[('HTTP '+r.status)]||0)+1;
+          return null;
+        }
+        return r.json();
+      })
+      .then(function(d){
+        if(!d) return null;
+        if(d.email) return d;
+        var reason = d.reason || 'no email';
+        registryLookupMisses[reason] = (registryLookupMisses[reason]||0)+1;
+        return null;
+      })
+      .catch(function(e){
+        var k = (e && e.name === 'AbortError') ? 'timeout' : 'network error';
+        registryLookupErrors[k] = (registryLookupErrors[k]||0)+1;
+        return null;
+      });
   }
 
   function enrichWithHunterEmail(jobs){
@@ -5125,6 +5149,8 @@
     }).then(function(){
       window.__hunterDebug = 'Email search: tried '+candidates.length+', found '+found+
         (registryFound ? ' \u00b7 employer registry (verified careers pages): '+registryFound : '')+
+        (Object.keys(registryLookupErrors).length ? ' \u00b7 registry lookup FAILED: '+JSON.stringify(registryLookupErrors) : '')+
+        (Object.keys(registryLookupMisses).length ? ' \u00b7 registry misses: '+JSON.stringify(registryLookupMisses) : '')+
         (prospeoFound ? ' \u00b7 Prospeo fallback: found '+prospeoFound : '')+
         (backendFinderUsed ? ' \u00b7 RapidAPI finder fallback: found '+backendFinderUsed : '')+
         (backendDomainFound ? ' ('+backendDomainFound+' via backend domain-finder)' : '')+
