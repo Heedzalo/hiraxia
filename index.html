@@ -3928,8 +3928,16 @@
     var isCoreTarget = function(j){ return !j.isStretch && geoMatchStrict(j.loc, cR) && !j.usNamesake; };
     var coreTargets = passedThreshold.filter(isCoreTarget);
     var rest = passedThreshold.filter(function(j){ return !isCoreTarget(j); });
-    var RESEARCH_CAP = 30;              // matches the backend's per-search cap (pulled back from 60 after out-of-memory kills took the whole backend down mid-search)
-    var CORE_GUARANTEE = 25;            // in-country on-role jobs get first claim on the 30 slots; the rest go to MENA/remote
+    // Raised 30 -> 45 per explicit request for wider coverage. The earlier
+    // pull-back from 60 was due to out-of-memory kills, so this stops well
+    // short of that: 45 adds real headroom without returning to the value
+    // that actually crashed the backend. In practice the cap is rarely the
+    // binding constraint — a live search researched only 12 of 26 jobs with
+    // the cap at 30, because off-field jobs and duplicate employers were
+    // filtered first — so this mainly helps searches that return many
+    // genuine in-country employers.
+    var RESEARCH_CAP = 45;
+    var CORE_GUARANTEE = 38;            // in-country on-role jobs keep first claim on the slots; the rest go to MENA/remote
     var coreSlice = coreTargets.slice(0, Math.max(CORE_GUARANTEE, 0));
     var selected = coreSlice.concat(rest.slice(0, Math.max(0, RESEARCH_CAP - coreSlice.length)));
     // BIG speed/cost win, no loss of emails: research is per-EMPLOYER, not
@@ -4067,10 +4075,42 @@
             var key = String(whyByUrl[u]).split(' but ')[0].split(':')[0].slice(0, 60);
             whyCounts[key] = (whyCounts[key] || 0) + 1;
           });
+          // Per-COMPANY breakdown. Real gap found via user report: asked why
+          // a specific company (Citystar) got no email, the aggregate line
+          // could only say "11x no published application address found" —
+          // there was no way to tell whether that company was researched and
+          // came up empty, was never researched at all, or had its address
+          // rejected by a validator. Names make it answerable.
+          var whyByCompany = [];
+          d.results.forEach(function(r){
+            if(r.email || !r.whyNoEmail) return;
+            whyByCompany.push((r.company || 'unknown') + ': ' + String(r.whyNoEmail).slice(0, 70));
+          });
+          // Jobs that never reached research at all are invisible in
+          // d.results, so they are reconstructed here — otherwise a company
+          // filtered out before research looks identical to one that was
+          // researched and found nothing.
+          var notResearched = [];
+          jobs.forEach(function(j){
+            if(j.email && !j.emailPredicted) return;
+            if(j.url && whyByUrl[j.url]) return;      // already explained above
+            if(j.url && byUrl[j.url]) return;          // research succeeded
+            var why = j.isStretch ? 'not researched: off-field for this search'
+              : (!j.company || isGenericCompanyName(j.company)) ? 'not researched: no real company name'
+              : (j._researchPriority !== undefined && j._researchPriority <= 0) ? 'not researched: below priority threshold'
+              : 'not researched: deferred to background enrichment';
+            notResearched.push((j.company || 'unknown') + ': ' + why);
+          });
+          window.__whyNoEmailByCompany = whyByCompany.concat(notResearched);
           var whyKeys = Object.keys(whyCounts);
           if(whyKeys.length){
             whyKeys.sort(function(a,b){ return whyCounts[b] - whyCounts[a]; });
             appendDiagLine('No email found \u2014 reasons: ' + whyKeys.slice(0, 4).map(function(k){ return whyCounts[k]+'\u00d7 '+k; }).join(' \u00b7 '));
+          }
+          // Name the companies, not just the counts, so a question like
+          // "why did Citystar get no email?" is answerable directly.
+          if(window.__whyNoEmailByCompany && window.__whyNoEmailByCompany.length){
+            appendDiagLine('Per company: ' + window.__whyNoEmailByCompany.slice(0, 25).join(' | '));
           }
           jobs.forEach(function(j){
             var match = j.url && byUrl[j.url];
@@ -5147,7 +5187,7 @@
     return runBatch(homeCandidates).then(function(){
       return runBatch(otherCandidates);
     }).then(function(){
-      window.__hunterDebug = 'Email search: tried '+candidates.length+', found '+found+
+      window.__hunterDebug = (window.__queryTranslation ? 'Query translated: '+window.__queryTranslation+' \u00b7 ' : '')+'Email search: tried '+candidates.length+', found '+found+
         (registryFound ? ' \u00b7 employer registry (verified careers pages): '+registryFound : '')+
         (Object.keys(registryLookupErrors).length ? ' \u00b7 registry lookup FAILED: '+JSON.stringify(registryLookupErrors) : '')+
         (Object.keys(registryLookupMisses).length ? ' \u00b7 registry misses: '+JSON.stringify(registryLookupMisses) : '')+
@@ -6528,6 +6568,9 @@
       return;
     }
     var q = document.getElementById('jobQuery').value.trim();
+    // Set by translateThenFire when the query is in another language.
+    // Keyword-matching boards use this; everything else keeps the original.
+    var qEnglish = null;
     var cc = sel.value;
     var btn = document.getElementById('findBtn');
     btn.disabled = true; btn.textContent = 'Scanning live boards\u2026';
@@ -6551,6 +6594,11 @@
     // building the array eagerly would start every fetch immediately,
     // which is exactly the bug.
     function fireSources(){
+      // qEnglish is the translated query when the user searched in another
+      // language, otherwise identical to q. Keyword-matching boards use it;
+      // AI-Discovery and the employer sources keep the original, since they
+      // handle either and may match native-language postings.
+      var qk = qEnglish || q;
       var named = [
         {n:'GoogleJobs', p:sourceGoogleJobs(q)},
         {n:'Jooble', p:sourceJooble(q, (curCity() ? curCity()+(c.gj?', '+c.gj:'') : (c.gj || '')))},
@@ -6560,13 +6608,13 @@
         {n:'Workable-search', p:sourceWorkableSearch(q, (curCity() || c.gj || ''))},
         (c.v==='lb' ? {n:'Jooble\u00b7Beirut', p:sourceJooble(q, 'Beirut')} : null),
         {n:'Remotive', p:sourceRemotive(q)},
-        {n:'Arbeitnow', p:sourceArbeitnow(q)},
+        {n:'Arbeitnow', p:sourceArbeitnow(qk)},
         {n:'Jobicy', p:sourceJobicy(q)},
         {n:'TheMuse', p:sourceMuse(q)},
         {n:'Himalayas', p:new Promise(function(res){ setTimeout(function(){ res(sourceHimalayas(q)); }, 100); }).then(function(p){ return p; })},
         {n:'RemoteJobs.org', p:new Promise(function(res){ setTimeout(function(){ res(sourceRemoteJobsOrg(q)); }, 200); }).then(function(p){ return p; })},
-        {n:'JobsPipe', p:new Promise(function(res){ setTimeout(function(){ res(sourceJobsPipe(q, (c.v==='sa2'?'sa':(c.v==='remote'?'':c.v)))); }, 900); }).then(function(p){ return p; })},
-        (c.v==='lb' ? {n:'HireLebanese', p:new Promise(function(res){ setTimeout(function(){ res(sourceHireLebanese(q)); }, 400); }).then(function(p){ return p; })} : null),
+        {n:'JobsPipe', p:new Promise(function(res){ setTimeout(function(){ res(sourceJobsPipe(qk, (c.v==='sa2'?'sa':(c.v==='remote'?'':c.v)))); }, 900); }).then(function(p){ return p; })},
+        (c.v==='lb' ? {n:'HireLebanese', p:new Promise(function(res){ setTimeout(function(){ res(sourceHireLebanese(qk)); }, 400); }).then(function(p){ return p; })} : null),
         (c.v==='lb' ? {n:'Daleel Madani', p:new Promise(function(res){ setTimeout(function(){ res(sourceDaleelMadani(q)); }, 500); }).then(function(p){ return p; })} : null),
         {n:'WebSearch', p:new Promise(function(res){ setTimeout(function(){ res(sourceWebSearchJobs(q, curCity() || c.gj || '')); }, 1500); }).then(function(p){ return p; })},
         {n:'AI-Discovery', p:new Promise(function(res){ setTimeout(function(){
@@ -6601,7 +6649,7 @@
       // LATER in the file, and relying on hoisting inside a hot path that
       // every other source avoids was an unnecessary risk. If Tanqeeb
       // returns nothing, it shows as "Tanqeeb (0)" like any other source.
-      named.push({ n:'Tanqeeb', p:sourceTanqeeb(q) });
+      named.push({ n:'Tanqeeb', p:sourceTanqeeb(qk) });
       // Employer careers pages. Registered alongside every other source so it
       // flows through the same dedup, scoring, email-research and staleness
       // handling — nothing about it is special-cased downstream.
@@ -7145,7 +7193,33 @@
     // Always runs — backendWarm never rejects, so a genuinely dead
     // backend still proceeds and reports honest per-source errors
     // rather than leaving the UI hanging forever.
-    backendWarm.then(fireSources, fireSources);
+    // Translate the query to English BEFORE firing sources when it is
+    // written in another language. Real gap found via user report: an Arabic
+    // search ("شيف مطعم") returned 0 from HireLebanese, JobsPipe, Tanqeeb and
+    // Arbeitnow, because those boards index Lebanese jobs in English and were
+    // handed Arabic text. AI-Discovery translated on its own and still found
+    // jobs, which made it look like an outage rather than a language
+    // mismatch. Translation failure never blocks the search — fireSources
+    // runs either way, with the original query.
+    function translateThenFire(){
+      var base = lsGet('hiraxia_proxyUrl').replace(/\/+$/,'');
+      return fetchWithTimeout(base+'/translate-query?q='+encodeURIComponent(q), {
+        headers: backendHeaders({})
+      }, 12000)
+        .then(function(r){ return r.ok ? r.json() : null; })
+        .then(function(d){
+          if(d && d.translated && d.english && d.english.toLowerCase() !== q.toLowerCase()){
+            window.__queryTranslation = q + ' \u2192 ' + d.english;
+            // Keyword-matching boards get the English form; the original is
+            // kept for AI-Discovery, which handles either and may match
+            // Arabic-language postings the English query would miss.
+            qEnglish = d.english;
+          }
+        })
+        .catch(function(){ /* translation is best-effort */ })
+        .then(fireSources, fireSources);
+    }
+    backendWarm.then(translateThenFire, translateThenFire);
   }
 
   /* ================= auto-growing discovery: learn from REAL companies in results ================= */
